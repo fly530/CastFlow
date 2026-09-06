@@ -1,0 +1,30 @@
+# ==============================================================================
+# 讓 k8s/ 可以被 kustomize 與 Argo CD 直接當作 base 使用：
+#
+#   # 遠端引用（可釘 commit）
+#   resources:
+#     - https://github.com/fly530/CastFlow//k8s?ref=<commit>
+#
+#   # 本機
+#   kubectl apply -k k8s/
+#
+# 各站點的差異（NodePort / Ingress、資源上限、節點親和性）請以 overlay 覆寫，
+# 不要改這裡 —— 這份 base 要保持對所有叢集通用。
+#
+# 注意：15-secret.yaml.example 刻意不列在下面。Secret 必須在部署前以
+# `kubectl create secret` 現場生成，不進版控。詳見該檔案的說明。
+# ==============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: castflow
+
+resources:
+  - 00-namespace.yaml
+  - 10-configmap.yaml
+  - 20-pvc.yaml
+  - 30-icecast.yaml
+  - 50-service.yaml
+  - 60-server.yaml
+  - 70-gateway.yaml
+  - 90-networkpolicy.yaml
