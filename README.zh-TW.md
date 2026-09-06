@@ -171,7 +171,8 @@ kubectl apply -f k8s/
 
 ---
 
-## 開源協議與鳴謝
+## 開源協議、技術鳴謝與免責宣告 (License & Disclaimers)
 
-* 本專案自研程式碼依據 [MIT License](LICENSE) 授權開源。
-* 上游開源依賴（Liquidsoap、Icecast、AzuraCast、hls.js、music-metadata）之鳴謝與隔離架構說明請參閱 [ACKNOWLEDGEMENTS.zh-TW.md](ACKNOWLEDGEMENTS.zh-TW.md)。
+* **授權協議**：本專案自研程式碼均依據 [MIT License](LICENSE) 授權開源。
+* **第三方開源軟體宣告**：上游開源組件（Liquidsoap、Icecast、Nginx、React、HLS.js、SQLite 等）之完整清單與容器架構隔離說明請參閱 [ACKNOWLEDGEMENTS.zh-TW.md](ACKNOWLEDGEMENTS.zh-TW.md)。
+* **法律與版權免責**：關於音訊內容合法性、公開播送版權許可證與軟體無擔保責任條款，請詳閱 [DISCLAIMER.zh-TW.md](DISCLAIMER.zh-TW.md)。

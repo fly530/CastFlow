@@ -171,7 +171,8 @@ Included manifests:
 
 ---
 
-## License & Acknowledgements
+## License, Acknowledgements & Disclaimer
 
-* Core application code is licensed under the [MIT License](LICENSE).
-* Upstream open source dependencies (Liquidsoap, Icecast, AzuraCast, hls.js, music-metadata) and architectural boundaries are documented in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+* **License**: Custom application code is licensed under the [MIT License](LICENSE).
+* **Open Source Software Disclosures**: Detailed list of upstream open-source software (Liquidsoap, Icecast, Nginx, React, HLS.js, SQLite, etc.) and architectural container boundaries are documented in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+* **Legal & Copyright Disclaimer**: Complete legal disclaimer regarding audio copyright ownership, public performance broadcast compliance, and "AS IS" software liability is provided in [DISCLAIMER.md](DISCLAIMER.md).
