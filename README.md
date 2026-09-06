@@ -11,43 +11,48 @@
 
 ```mermaid
 flowchart TD
-    subgraph Storage [Shared Storage]
-        MusicVol[("/music (Playlists A~G & custom MP3s)")]
-        HLSVol[("/output/hls (.m3u8 & .mp3 segments)")]
+    subgraph Storage [Persistent Storage & Shared Memory]
+        MusicVol[("/music (Playlists A~G & Audio Files)")]
+        DataVol[("/data (radio.db Database & System Logs)")]
+        HLSTmpfs[("RAM Disk (tmpfs / emptyDir)\n(/output/hls Real-time Segments)")]
     end
 
-    subgraph Core [Audio Engine Core]
-        LS["Liquidsoap v2.2.5\n(Scheduling, Crossfade, Shuffling, Dual Output)"]
-        Icecast["Icecast 2.4\n(MP3 Distribution Port: 8000)"]
-        NginxHLS["Web HLS Server\n(Nginx CORS Port: 8088)"]
+    subgraph StreamingCore [Streaming Core]
+        LS["Liquidsoap v2.2.5\n(Mixing, Smooth Crossfade, Dual Output)"]
+        Icecast["Icecast 2.4 (Alpine)\n(MP3 Audio Broadcast Distribution)"]
     end
 
-    subgraph Backend [Control & Communication Layer]
-        Server["CastFlow Server (Node.js)\n(Telnet, REST API & WebSocket Port: 3001)"]
-        SQLite[("Embedded SQLite\n(/music/radio.db - WAL Mode)")]
+    subgraph Backend [Backend Control & Scheduling]
+        Server["CastFlow Server (Node.js 22)\n(AutoDJ Scheduling, REST API & WebSocket)"]
+        SQLite[("Embedded SQLite (WAL Mode)\n/data/radio.db")]
     end
 
-    subgraph Clients [Client Applications]
-        ESP32["ESP32 / Hardware Player\n(HTTP MP3 Stream)"]
-        WebPlayer["Listener Web Player (React + HLS.js)\nPort: 3000"]
-        WebAdmin["Admin Dashboard (React + Tailwind + JWT)\nPort: 3002"]
+    subgraph GatewayLayer [Unified Access Gateway]
+        Gateway["CastFlow Gateway (Nginx)\n(Single Entry Point Port: 80)"]
+    end
+
+    subgraph Clients [Client Applications & Listeners]
+        Listener["Web Player (React + HLS.js)\nhttp://localhost/"]
+        Admin["Admin Console (React + Tailwind + JWT)\nhttp://localhost/admin/"]
+        Hardware["ESP32 / Hardware Player / VLC\nhttp://localhost/stream"]
     end
 
     MusicVol --> LS
-    LS -->|MP3 Stream| Icecast
-    LS -->|Write Segments| HLSVol
-    HLSVol --> NginxHLS
+    LS -->|MP3 Broadcast| Icecast
+    LS -->|In-Memory Writes| HLSTmpfs
+    HLSTmpfs -->|Zero-proxy direct read /hls/| Gateway
 
-    Server <-->|Telnet Control Port: 1234| LS
+    Server <-->|Telnet Control (Port: 1234)| LS
     Server <-->|JSON Stats| Icecast
-    Server -->|Upload & Manage| MusicVol
-    Server <-->|Auth & History| SQLite
+    Server -->|Playlist Upload & Manage| MusicVol
+    Server <-->|Schedules/History/Auth| SQLite
+    DataVol --> SQLite
 
-    Icecast -->|/stream| ESP32
-    Icecast -->|Fallback Stream| WebPlayer
-    NginxHLS -->|HLS Segments| WebPlayer
-    Server <-->|REST API & WebSocket /ws| WebPlayer
-    Server <-->|JWT Auth API & WebSocket /ws| WebAdmin
+    Gateway <-->|Reverse Proxy /api/ & /ws| Server
+    Gateway -->|Reverse Proxy /stream| Icecast
+    Gateway -->|Serve Frontend SPA /| Listener
+    Gateway -->|Serve Admin SPA /admin/| Admin
+    Icecast -->|Direct Stream| Hardware
 ```
 
 ---
@@ -61,7 +66,7 @@ flowchart TD
   * **Icecast MP3 Stream (`/stream`)**: Direct streaming for ESP32/Arduino IoT devices and legacy players (VLC, foobar2000).
   * **Web HLS Stream (`/hls`)**: Powered by HLS.js for low-latency, stutter-free playback across all modern desktop and mobile browsers.
 * ⚡ **Real-Time WebSocket Sync (`/ws`)**: Sub-second push notifications for track changes, playback progress, and listener count without polling.
-* 🗄️ **Embedded SQLite Database**: Lightweight SQLite database with WAL (Write-Ahead Logging) enabled at `/music/radio.db`. Stores playback history, visual schedule rules, and administrator authentication.
+* 🗄️ **Embedded SQLite Database**: Zero external database dependencies; runs WAL mode at `/data/radio.db` for playback history, custom schedule rules, and administrator credentials (isolated from `/music` to prevent conflicts during audio backups).
 * 🔐 **Security & Access Control**:
   * Auto-generates a secure random administrator password upon initial boot (e.g., `cf_xxxxxx`).
   * Public endpoints (streams, status, history, album covers) are freely accessible.

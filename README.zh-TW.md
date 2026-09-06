@@ -11,43 +11,48 @@
 
 ```mermaid
 flowchart TD
-    subgraph Storage [共享儲存儲存區]
-        MusicVol[("/music (歌單 A~G 及自訂 MP3)")]
-        HLSVol[("/output/hls (.m3u8 & .mp3 切片)")]
+    subgraph Storage [持久化儲存與共享記憶體]
+        MusicVol[("/music (曲庫檔案與 A~G 歌單)")]
+        DataVol[("/data (radio.db 資料庫與系統紀錄)")]
+        HLSTmpfs[("記憶體磁碟 (tmpfs / emptyDir)\n(/output/hls 即時切片)")]
     end
 
-    subgraph Core [廣播引擎核心]
-        LS["Liquidsoap v2.2.5\n(排程、智慧轉場、打亂、雙軌推流)"]
-        Icecast["Icecast 2.4\n(MP3 音訊分發 Port: 8000)"]
-        NginxHLS["Web HLS Server\n(Nginx CORS Port: 8088)"]
+    subgraph StreamingCore [廣播與串流核心]
+        LS["Liquidsoap v2.2.5\n(混音、平滑轉場、雙軌推流)"]
+        Icecast["Icecast 2.4 (Alpine)\n(MP3 廣播串流分發)"]
     end
 
-    subgraph Backend [控制與通訊層]
-        Server["CastFlow Server (Node.js)\n(Telnet, REST API & WebSocket Port: 3001)"]
-        SQLite[("輕量嵌入式 SQLite\n(/music/radio.db - WAL 模式)")]
+    subgraph Backend [後端排程與控制層]
+        Server["CastFlow Server (Node.js 22)\n(AutoDJ 排程決策、REST API & WebSocket)"]
+        SQLite[("內嵌 SQLite (WAL 模式)\n/data/radio.db")]
     end
 
-    subgraph Clients [終端應用]
-        ESP32["ESP32 / 硬體音訊播放器\n(HTTP MP3 Stream)"]
-        WebPlayer["聽眾播放器 (React + HLS.js)\nPort: 3000"]
-        WebAdmin["管理者控制後台 (React + Tailwind + JWT)\nPort: 3002"]
+    subgraph GatewayLayer [統一存取閘道]
+        Gateway["CastFlow Gateway (Nginx)\n(單一入口 Port: 80)"]
+    end
+
+    subgraph Clients [終端應用與聽眾]
+        Listener["聽眾播放器 (React + HLS.js)\nhttp://localhost/"]
+        Admin["管理者後台 (React + Tailwind + JWT)\nhttp://localhost/admin/"]
+        Hardware["ESP32 / 硬體播放器 / VLC\nhttp://localhost/stream"]
     end
 
     MusicVol --> LS
     LS -->|MP3 推流| Icecast
-    LS -->|切片寫入| HLSVol
-    HLSVol --> NginxHLS
+    LS -->|極速記憶體寫入| HLSTmpfs
+    HLSTmpfs -->|零代理直接讀取 /hls/| Gateway
 
-    Server <-->|Telnet 控制 Port: 1234| LS
+    Server <-->|Telnet 控制 (Port: 1234)| LS
     Server <-->|JSON 統計| Icecast
-    Server -->|上傳/管理| MusicVol
-    Server <-->|帳密/歷史持久化| SQLite
+    Server -->|曲庫管理與上傳| MusicVol
+    Server <-->|排程/歷史/鑑權持久化| SQLite
+    DataVol --> SQLite
 
-    Icecast -->|/stream| ESP32
-    Icecast -->|Fallback 串流| WebPlayer
-    NginxHLS -->|HLS 切片| WebPlayer
-    Server <-->|REST API & WebSocket /ws| WebPlayer
-    Server <-->|JWT 鑑權 API & WebSocket /ws| WebAdmin
+    Gateway <-->|反向代理 /api/ & /ws| Server
+    Gateway -->|反向代理 /stream| Icecast
+    Gateway -->|提供前端靜態 SPA /| Listener
+    Gateway -->|提供管理後台 SPA /admin/| Admin
+    Icecast -->|原生串流| Hardware
 ```
 
 ---
@@ -61,7 +66,7 @@ flowchart TD
   * **Icecast MP3 串流 (`/stream`)**：支援 ESP32 / Arduino 等物聯網硬體播放器、傳統播放器（VLC、foobar2000）。
   * **Web HLS 串流 (`/hls`)**：採用 HLS.js，為現代 Web 瀏覽器提供低延遲且穩定的切片播放。
 * ⚡ **WebSocket 毫秒級即時同步 (`/ws`)**：曲目切換、當前播放進度、在線聽眾數毫秒級主動推送至前台與管理面板，無須瀏覽器高頻輪詢。
-* 🗄️ **輕量內嵌 SQLite 資料庫**：免除外部資料庫龐大負擔，在 `/music/radio.db` 啟用 WAL 模式，自動記錄曲目歷史（Play History）、自訂排程規則與管理員鑑權資訊。
+* 🗄️ **輕量內嵌 SQLite 資料庫**：免除外部資料庫龐大負擔，在 `/data/radio.db` 啟用 WAL 模式，自動記錄曲目歷史（Play History）、自訂排程規則與管理員鑑權資訊（與音樂目錄分離，確保備份還原不混淆）。
 * 🔐 **安全防護與權限隔離**：
   * 首次開機於容器啟動日誌中自動產生安全隨機管理密碼（格式如 `cf_xxxxxx`）。
   * 公開聽眾端點（串流、即時狀態、播放歷史、專輯封面）免登入即可存取。
