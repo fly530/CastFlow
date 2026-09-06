@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: icecast
+  namespace: castflow
+  labels:
+    app: icecast
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: icecast
+  template:
+    metadata:
+      labels:
+        app: icecast
+    spec:
+      containers:
+      - name: icecast
+        image: moul/icecast:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: ICECAST_SOURCE_PASSWORD
+          value: "hackme"
+        - name: ICECAST_ADMIN_PASSWORD
+          value: "hackme"
+        - name: ICECAST_PASSWORD
+          value: "hackme"
+        ports:
+        - containerPort: 8000
+          name: stream
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /status-json.xsl
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /status-json.xsl
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10

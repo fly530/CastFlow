@@ -1,0 +1,132 @@
+# ==============================================================================
+# CastFlow - Liquidsoap v2.2.5 廣播排程與混音核心腳本
+# ==============================================================================
+
+# 1. 系統日誌與控制介面設定
+settings.log.level.set(3)
+settings.log.file.set(false)
+settings.log.stdout.set(true)
+
+# 開啟 Telnet 控制介面 (供後端 Node.js API 查詢元資料、剩餘時間、控制切歌等)
+settings.server.telnet.set(true)
+settings.server.telnet.port.set(1234)
+settings.server.telnet.bind_addr.set("0.0.0.0")
+
+# 2. 環境變數讀取
+music_dir    = environment.get(default="/music", "MUSIC_DIR")
+icecast_host = environment.get(default="icecast", "ICECAST_HOST")
+icecast_port = int_of_string(default=8000, environment.get(default="8000", "ICECAST_PORT"))
+icecast_pass = environment.get(default="hackme", "ICECAST_PASSWORD")
+icecast_mount= environment.get(default="stream", "ICECAST_MOUNT")
+hls_dir      = environment.get(default="/output/hls", "HLS_DIR")
+
+# 3. 歌單定義 (A ~ G 歌單，打亂順序，自動監聽檔案夾更新)
+# 通用規則：所有歌單讀取時皆以 mode="randomize" 進行隨機打亂 (shuffle)
+playlist_a = playlist(id="playlist_a", reload_mode="watch", mode="randomize", "#{music_dir}/A")
+playlist_b = playlist(id="playlist_b", reload_mode="watch", mode="randomize", "#{music_dir}/B")
+playlist_c = playlist(id="playlist_c", reload_mode="watch", mode="randomize", "#{music_dir}/C")
+playlist_d = playlist(id="playlist_d", reload_mode="watch", mode="randomize", "#{music_dir}/D")
+playlist_e = playlist(id="playlist_e", reload_mode="watch", mode="randomize", "#{music_dir}/E")
+playlist_f = playlist(id="playlist_f", reload_mode="watch", mode="randomize", "#{music_dir}/F")
+playlist_g = playlist(id="playlist_g", reload_mode="watch", mode="randomize", "#{music_dir}/G")
+
+# 4. 關鍵業務邏輯與排程規則 (Business Logic)
+# 4.1 預設日常時段：每 3 首 A 歌單，插播 1 首 B 歌單 (rotate weights 3:1)
+daily_stream = rotate(weights=[3, 1], [playlist_a, playlist_b])
+
+# 4.2 夜間時段 (22:00 ~ 23:00)：A 歌單與 G 歌單 1:1 輪替
+night_stream = rotate(weights=[1, 1], [playlist_a, playlist_g])
+
+# 4.3 每小時循環：整點等待目前歌曲播畢後，插播 1 首 C 歌單
+last_hourly_c_hour = ref(-1)
+def hourly_c_condition() =
+  t = time.local()
+  # 於每小時初（0 ~ 10 分鐘內），若本小時尚未播放過 C 歌單則觸發
+  if t.min < 10 and last_hourly_c_hour() != t.hour then
+    true
+  else
+    false
+  end
+end
+
+hourly_c = source.on_track(playlist_c, fun (_) -> last_hourly_c_hour := time.local().hour)
+
+# 4.4 特定時段插播 (21:30 ~ 22:00 等時段單曲切換)
+# 所有切換皆設 track_sensitive=true，確保等待當前歌曲完整播完才無縫切換
+scheduled_stream = switch(track_sensitive=true, [
+  (hourly_c_condition, hourly_c),
+  ({ 21h30 - 21h40 }, playlist_d),
+  ({ 21h40 - 21h50 }, playlist_e),
+  ({ 21h50 - 22h00 }, playlist_f),
+  ({ 22h00 - 23h00 }, night_stream),
+  ({ true }, daily_stream)
+])
+
+# 4.5 動態佇列 (由後端 AutoDJ 智慧排程器透過 Telnet 優先推送)
+dynamic_queue = request.queue(id="dynamic_queue")
+
+# 混合排程：若 dynamic_queue 有歌曲則優先播放，隊列為空自動回退至常規排程
+mixed_stream = fallback(track_sensitive=true, [dynamic_queue, scheduled_stream])
+
+# 5. 平滑淡入淡出轉場 (crossfade with smooth envelope & anti-clipping)
+# 停用不穩定的 smart 分析，採用預測且連續的平滑淡出與淡入，保證無破音無斷裂
+faded_stream = crossfade(
+  smart=false,
+  duration=3.0,
+  fade_in=1.5,
+  fade_out=2.5,
+  conservative=true,
+  mixed_stream
+)
+
+# 透過廣播級 Limiter 限制器防止淡入淡出時雙軌疊加音量超過 0dBFS 導致數位破音 (爆音)
+limited_radio = limit(threshold=-1.0, attack=20.0, release=150.0, faded_stream)
+
+# 確保輸出安全（若暫無音樂自動補靜音，防止廣播程序中斷崩潰）
+final_radio = mksafe(limited_radio)
+
+# 6. 自訂註冊 Telnet 指令 (提供後端管理面板查詢與調用)
+server.register(namespace="radio", description="取得廣播伺服器運作狀態", "status", fun (_) -> "ALIVE")
+server.register(namespace="radio", description="平滑淡出切換至下一首曲目 (無爆音)", "skip", fun (_) -> begin
+  dynamic_queue.skip()
+  "OK: Skipped dynamic queue"
+end)
+server.register(namespace="radio", description="強制重新掃描並載入所有歌單資料夾", "reload_all", fun (_) -> begin
+  playlist_a.reload()
+  playlist_b.reload()
+  playlist_c.reload()
+  playlist_d.reload()
+  playlist_e.reload()
+  playlist_f.reload()
+  playlist_g.reload()
+  "OK: All playlists (A-G) reloaded"
+end)
+
+# 7. 雙軌輸出 (Dual Output)
+# 7.1 Icecast MP3 串流 (供 ESP32 硬體或傳統廣播接收器使用)
+output.icecast(
+  %mp3(bitrate=256),
+  id="icecast_mp3",
+  host=icecast_host,
+  port=icecast_port,
+  password=icecast_pass,
+  mount=icecast_mount,
+  name="CastFlow Live Stream",
+  description="Cloud-Native CastFlow MP3 Stream for Hardware and Web",
+  genre="Various",
+  url="https://github.com/fly530/CastFlow",
+  final_radio
+)
+
+# 7.2 Web HLS 串流 (產生 m3u8 與切片，供前端現代瀏覽器播放)
+output.file.hls(
+  id="hls_web",
+  playlist="live.m3u8",
+  segment_duration=4.0,
+  segments=8,
+  segments_overhead=6,
+  temp_dir=hls_dir,
+  hls_dir,
+  [("live", %ffmpeg(format="mpegts", %audio(codec="aac", b="256k")))],
+  final_radio
+)

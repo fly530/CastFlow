@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server
+  namespace: castflow
+  labels:
+    app: server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: server
+  template:
+    metadata:
+      labels:
+        app: server
+    spec:
+      containers:
+      - name: server
+        image: castflow-server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3001
+          name: http
+        env:
+        - name: PORT
+          value: "3001"
+        - name: LIQUIDSOAP_HOST
+          value: "liquidsoap-svc"
+        - name: LIQUIDSOAP_PORT
+          value: "1234"
+        - name: ICECAST_HOST
+          value: "icecast-svc"
+        - name: ICECAST_PORT
+          value: "8000"
+        - name: ICECAST_MOUNT
+          value: "stream"
+        - name: MUSIC_DIR
+          value: "/music"
+        volumeMounts:
+        - name: music-volume
+          mountPath: "/music"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 10
+          periodSeconds: 15
+      volumes:
+      - name: music-volume
+        persistentVolumeClaim:
+          claimName: radio-music-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server-svc
+  namespace: castflow
+  labels:
+    app: server
+spec:
+  selector:
+    app: server
+  ports:
+  - port: 3001
+    targetPort: 3001
+    name: http
+  type: ClusterIP

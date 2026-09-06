@@ -1,0 +1,59 @@
+name: Build and Release CastFlow
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate-k8s:
+    name: Validate Kubernetes Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'latest'
+
+      - name: Dry-run Validate K8s YAMLs
+        run: |
+          kubectl apply --dry-run=client -f k8s/
+
+  build-containers:
+    name: Build Docker Containers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Backend Server Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./server
+          push: false
+          tags: castflow-server:latest
+
+      - name: Build Listener Player Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend-player
+          push: false
+          tags: castflow-player:latest
+
+      - name: Build Admin Dashboard Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend-admin
+          push: false
+          tags: castflow-admin:latest

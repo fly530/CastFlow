@@ -1,0 +1,99 @@
+services:
+  icecast:
+    image: moul/icecast:latest
+    container_name: castflow-icecast
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ICECAST_SOURCE_PASSWORD=hackme
+      - ICECAST_ADMIN_PASSWORD=hackme
+      - ICECAST_PASSWORD=hackme
+
+  liquidsoap:
+    image: savonet/liquidsoap:v2.2.5
+    container_name: castflow-liquidsoap
+    restart: unless-stopped
+    depends_on:
+      - icecast
+    ports:
+      - "1234:1234"
+    environment:
+      - ICECAST_HOST=icecast
+      - ICECAST_PORT=8000
+      - ICECAST_PASSWORD=hackme
+      - ICECAST_MOUNT=stream
+      - MUSIC_DIR=/music
+      - HLS_DIR=/output/hls
+    volumes:
+      - ./liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro
+      - ./music:/music
+      - hls-ram:/output/hls
+    command: ["/etc/liquidsoap/radio.liq"]
+
+  web-hls:
+    image: nginx:alpine
+    container_name: castflow-hls
+    restart: unless-stopped
+    depends_on:
+      - liquidsoap
+    ports:
+      - "8088:80"
+    volumes:
+      - hls-ram:/usr/share/nginx/html:ro
+      - ./nginx-hls.conf:/etc/nginx/conf.d/default.conf:ro
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: castflow-server
+    restart: unless-stopped
+    depends_on:
+      - liquidsoap
+      - icecast
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - LIQUIDSOAP_HOST=liquidsoap
+      - LIQUIDSOAP_PORT=1234
+      - ICECAST_HOST=icecast
+      - ICECAST_PORT=8000
+      - ICECAST_MOUNT=stream
+      - MUSIC_DIR=/music
+    volumes:
+      - ./music:/music
+
+  player:
+    build:
+      context: ./frontend-player
+      dockerfile: Dockerfile
+    container_name: castflow-player
+    restart: unless-stopped
+    depends_on:
+      - server
+      - web-hls
+      - icecast
+    ports:
+      - "3000:80"
+
+  admin:
+    build:
+      context: ./frontend-admin
+      dockerfile: Dockerfile
+    container_name: castflow-admin
+    restart: unless-stopped
+    depends_on:
+      - server
+      - icecast
+    ports:
+      - "3002:80"
+
+volumes:
+  hls-ram:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=64m,mode=1777"
