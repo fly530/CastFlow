@@ -23,9 +23,24 @@ jobs:
         with:
           version: 'latest'
 
-      - name: Dry-run Validate K8s YAMLs
+      # ★ 不要用 `kubectl apply --dry-run=client`。
+      #
+      # 它「看起來」是離線驗證，實際上仍會向 API server 索取 OpenAPI schema：
+      #   failed to download openapi: Get "http://localhost:8080/openapi/v2":
+      #   dial tcp [::1]:8080: connect: connection refused
+      #
+      # CI runner 沒有叢集，所以這個 job 從建立以來每一次都是紅的 ——
+      # 連語法都沒真的驗到。而且它會把 kustomization.yaml 也當成清單去套。
+      #
+      # kubeconform 用內建的 JSON schema 離線驗證，-strict 會擋下多餘欄位
+      # （拼錯的 key 不會再被安靜忽略）。先經 kubectl kustomize 渲染，
+      # 順便確保 base 本身組得起來。
+      - name: Validate K8s Manifests (offline schema validation)
         run: |
-          kubectl apply --dry-run=client -f k8s/
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp
+          kubectl kustomize k8s/ | /tmp/kubeconform -strict -summary -
 
       # radio.liq 有兩份：liquidsoap/radio.liq（Compose 掛載）與 k8s/10-configmap.yaml
       # 內嵌的那份。只改一邊會讓 Compose 與 K8s 的播放行為分歧，而且不會有任何錯誤訊息。
