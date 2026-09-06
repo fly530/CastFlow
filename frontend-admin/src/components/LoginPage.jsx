@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Lock, KeyRound, User, AlertCircle, ShieldAlert, Radio, ArrowRight, Github } from 'lucide-react';
 import { login } from '../utils/api.js';
-import CastFlowLogo from './CastFlowLogo';
 
 export default function LoginPage({ onLoginSuccess }) {
   const [username, setUsername] = useState('admin');
@@ -41,9 +40,7 @@ export default function LoginPage({ onLoginSuccess }) {
       {/* 頂部簡易導覽 */}
       <div className="w-full max-w-5xl flex items-center justify-between z-10 py-2">
         <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center shadow-lg shadow-purple-500/20 ring-1 ring-white/10">
-            <CastFlowLogo className="w-5 h-5" />
-          </div>
+          <img src="/admin.svg" alt="CastFlow Admin" className="w-8 h-8 object-contain shrink-0" />
           <div>
             <span className="text-sm font-bold tracking-tight text-white">CastFlow</span>
             <span className="text-[10px] ml-1.5 px-1.5 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono font-semibold border border-purple-500/30">

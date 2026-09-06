@@ -1,14 +1,11 @@
 import React from 'react';
 import { Users, Cpu, RadioTower } from 'lucide-react';
-import CastFlowLogo from './CastFlowLogo';
 
 export default function Navbar({ online, listeners, onOpenInfoModal }) {
   return (
     <header className="w-full max-w-4xl mx-auto px-4 py-6 flex items-center justify-between">
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center shadow-lg shadow-indigo-500/20 ring-1 ring-white/10">
-          <CastFlowLogo className="w-6 h-6" />
-        </div>
+        <img src="/radio.svg" alt="CastFlow" className="w-9 h-9 object-contain shrink-0" />
         <div>
           <h1 className="text-xl font-bold tracking-tight bg-gradient-to-r from-white via-slate-100 to-slate-400 bg-clip-text text-transparent">
             CastFlow
