@@ -123,22 +123,57 @@ docker logs castflow-server | grep -E "Password|admin"
 Production-grade Kubernetes manifests are provided in the `k8s/` directory:
 
 ```bash
-# 1. Validate manifest syntax
+# 1. Create the namespace
+kubectl apply -f k8s/00-namespace.yaml
+
+# 2. Create the Secret (REQUIRED — the server refuses to start without it).
+#    Keys are generated on the spot; they never touch a file or version control.
+kubectl -n castflow create secret generic castflow-secrets \
+  --from-literal=jwt-secret="$(openssl rand -hex 32)" \
+  --from-literal=icecast-source-password="$(openssl rand -hex 16)" \
+  --from-literal=icecast-admin-password="$(openssl rand -hex 16)"
+
+# 3. Validate manifest syntax
 kubectl apply --dry-run=client -f k8s/
 
-# 2. Deploy to Kubernetes cluster (default namespace: castflow)
+# 4. Deploy to Kubernetes cluster (default namespace: castflow)
 kubectl apply -f k8s/
+
+# 5. Read the generated initial admin password
+kubectl -n castflow logs deploy/server | grep -A4 "CastFlow Security"
 ```
+
+> **External access**: the Service in `70-gateway.yaml` defaults to `type: LoadBalancer`.
+> On clusters without a LoadBalancer controller — K3s installed with `--disable servicelb`,
+> or plain bare-metal — the EXTERNAL-IP stays `<pending>` forever and nothing can reach it.
+> Switch it to `type: NodePort` and point your existing reverse proxy at that port.
+
+> **Updating images**: the manifests use `:latest` with `imagePullPolicy: IfNotPresent`.
+> Rebuilding the same tag does **not** trigger a rollout; run
+> `kubectl -n castflow rollout restart deploy/server deploy/gateway`.
+> Use versioned tags in production.
 
 Included manifests:
 * `00-namespace.yaml`: Creates the dedicated `castflow` namespace.
-* `10-configmap.yaml`: Mounts dynamic Liquidsoap scripts.
-* `15-secret.yaml`: Secure credentials for JWT and Icecast.
+* `10-configmap.yaml`: Mounts dynamic Liquidsoap scripts (must stay byte-identical to `liquidsoap/radio.liq`; enforced in CI).
+* `15-secret.yaml.example`: Secret template and generation commands. **Deliberately not `.yaml`**, so placeholder credentials can never be applied by `kubectl apply -f k8s/`.
 * `20-pvc.yaml`: PersistentVolumeClaims for audio files, database, and backups (ReadWriteOnce for local-path).
 * `30-icecast.yaml`: Icecast audio streaming server deployment.
 * `50-service.yaml`: Core internal ClusterIP service routing (icecast & liquidsoap).
 * `60-server.yaml`: Backend Node.js API server Deployment & Service.
 * `70-gateway.yaml`: Unified Gateway + Liquidsoap core (Multi-container Pod sharing in-memory tmpfs emptyDir + LoadBalancer Service).
+* `90-networkpolicy.yaml`: Restricts the Liquidsoap Telnet port (1234) to the `server` Pod (requires a NetworkPolicy-capable CNI).
+
+### Scheduling runtime dependency
+
+All scheduling decisions live in the backend Node.js AutoDJ scheduler (a 5-second tick),
+which pushes tracks into Liquidsoap's `dynamic_queue` over Telnet. `radio.liq` itself only
+handles the queue and crossfades — it contains no time-of-day logic. That is what makes
+admin-console schedule edits take effect immediately without reloading Liquidsoap.
+
+The trade-off: **when the `server` Pod is down, scheduling stops**. Broadcast does not go
+silent (an empty `dynamic_queue` falls back to shuffling playlist A), but it quietly
+degrades to A-only with no visible error. Wire `server`'s `/health` into your alerting.
 
 ---
 

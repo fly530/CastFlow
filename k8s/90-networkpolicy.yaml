@@ -1,0 +1,40 @@
+# ==============================================================================
+# NetworkPolicy —— 限制 Liquidsoap 的 Telnet 控制埠
+#
+# radio.liq 把 Telnet 介面綁在 0.0.0.0:1234 且沒有任何認證，
+# dynamic_queue.push / skip / flush_and_skip 全部開放。同叢集內任何一個
+# Pod 都能直接控制電台播什麼 —— 在共用叢集裡這是實質的權限外洩。
+#
+# ⚠ 需要 CNI 支援才會生效。k3s 內建 kube-router 的 netpol controller，
+#   開箱即生效；但純 flannel（無 netpol controller）會「安靜地忽略」這份規則
+#   —— 不會報錯，只是沒有保護。部署後請實測驗證，不要假設它有效：
+#
+#   kubectl -n castflow run np-test --rm -it --restart=Never \
+#     --image=busybox -- nc -zv liquidsoap 1234
+#   → 預期 timeout / refused；若連得上表示 CNI 沒在執行 NetworkPolicy。
+# ==============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: liquidsoap-telnet
+  namespace: castflow
+spec:
+  # 目標是 gateway Pod —— liquidsoap 容器住在裡面（與 nginx 同 Pod 共用 tmpfs）
+  podSelector:
+    matchLabels:
+      app: gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    # 1) Telnet 1234：只允許 server Pod（AutoDJ 排程器）連入
+    - from:
+        - podSelector:
+            matchLabels:
+              app: server
+      ports:
+        - protocol: TCP
+          port: 1234
+    # 2) HTTP 80：對外入口，不限制來源（Ingress / NodePort / LoadBalancer 都要進得來）
+    - ports:
+        - protocol: TCP
+          port: 80

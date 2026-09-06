@@ -23,7 +23,13 @@ data:
     music_dir    = environment.get(default="/music", "MUSIC_DIR")
     icecast_host = environment.get(default="icecast", "ICECAST_HOST")
     icecast_port = int_of_string(default=8000, environment.get(default="8000", "ICECAST_PORT"))
-    icecast_pass = environment.get(default="hackme", "ICECAST_PASSWORD")
+    # ★ 變數名必須是 ICECAST_SOURCE_PASSWORD，不能是 ICECAST_PASSWORD。
+    # libretime/icecast 的 entrypoint 只認 ICECAST_SOURCE_PASSWORD / ICECAST_RELAY_PASSWORD /
+    # ICECAST_ADMIN_PASSWORD 等變數，ICECAST_PASSWORD 會被無聲丟棄（那是舊的 moul/icecast 才有的）。
+    # 兩邊名字不一致時 Icecast 用的是 source-password、liquidsoap 送的是另一個值 → 推流 401。
+    # 症狀很難查：HLS 是檔案輸出不經過 Icecast，網頁播放器照常有聲音，
+    # 只有 /stream（ESP32 / VLC 那條硬體路）是啞的。
+    icecast_pass = environment.get(default="hackme", "ICECAST_SOURCE_PASSWORD")
     icecast_mount= environment.get(default="stream", "ICECAST_MOUNT")
     hls_dir      = environment.get(default="/output/hls", "HLS_DIR")
 

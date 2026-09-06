@@ -30,11 +30,6 @@ spec:
             secretKeyRef:
               name: castflow-secrets
               key: icecast-admin-password
-        - name: ICECAST_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: castflow-secrets
-              key: icecast-password
         ports:
         - containerPort: 8000
           name: stream

@@ -123,22 +123,56 @@ docker logs castflow-server | grep -E "Password|admin"
 本專案提供符合生產級別的 K8s 部署資源定義清單：
 
 ```bash
-# 1. 預先驗證部署清單語法
+# 1. 建立 Namespace
+kubectl apply -f k8s/00-namespace.yaml
+
+# 2. 產生 Secret（★ 必要步驟，不做的話 server 會拒絕啟動）
+#    金鑰用指令現場生成，不寫進檔案、不進版控。
+kubectl -n castflow create secret generic castflow-secrets \
+  --from-literal=jwt-secret="$(openssl rand -hex 32)" \
+  --from-literal=icecast-source-password="$(openssl rand -hex 16)" \
+  --from-literal=icecast-admin-password="$(openssl rand -hex 16)"
+
+# 3. 預先驗證部署清單語法
 kubectl apply --dry-run=client -f k8s/
 
-# 2. 部署至 K8s 叢集 (預設命名空間: castflow)
+# 4. 部署至 K8s 叢集 (預設命名空間: castflow)
 kubectl apply -f k8s/
+
+# 5. 取得首次登入的管理員隨機密碼
+kubectl -n castflow logs deploy/server | grep -A4 "CastFlow Security"
 ```
+
+> **關於對外存取**：`70-gateway.yaml` 的 Service 預設是 `type: LoadBalancer`。
+> 若叢集沒有 LoadBalancer controller（例如以 `--disable servicelb` 安裝的 K3s，
+> 或裸機自建環境），EXTERNAL-IP 會永遠停在 `<pending>`，外部連不進來。
+> 這種環境請改成 `type: NodePort`，再由既有的反向代理指向該埠。
+
+> **關於更新映像**：清單使用 `:latest` + `imagePullPolicy: IfNotPresent`。
+> 重新建置同名 tag 後 Deployment **不會**自動察覺，需手動觸發：
+> `kubectl -n castflow rollout restart deploy/server deploy/gateway`
+> 正式環境建議改用帶版號的 tag。
 
 部署清單包含：
 * `00-namespace.yaml`: 隔離至獨立 `castflow` Namespace。
-* `10-configmap.yaml`: 動態掛載 Liquidsoap 排程腳本。
-* `15-secret.yaml`: 安全管理 JWT 金鑰與 Icecast 串流密碼 (Secret)。
+* `10-configmap.yaml`: 動態掛載 Liquidsoap 排程腳本（內容需與 `liquidsoap/radio.liq` 完全一致，CI 有檢查）。
+* `15-secret.yaml.example`: Secret 範本與生成指令。**刻意不是 `.yaml`**，以免帶著佔位金鑰被 `kubectl apply -f k8s/` 套進叢集。
 * `20-pvc.yaml`: 音訊檔案、資料庫與備份檔之 PersistentVolumeClaims (ReadWriteOnce 適配 local-path)。
 * `30-icecast.yaml`: 核心音訊推流伺服器 Icecast Deployment。
 * `50-service.yaml`: 內部服務轉發路由 (Icecast 與 Liquidsoap ClusterIP)。
 * `60-server.yaml`: 後端 Node.js API 伺服器 Deployment 與 Service。
 * `70-gateway.yaml`: 單一整合 Gateway 與 Liquidsoap (同 Pod 共享記憶體 tmpfs 零磁碟耗損 + 對外 LoadBalancer Service)。
+* `90-networkpolicy.yaml`: 限制 Liquidsoap Telnet (1234) 僅接受 server Pod 連入（需 CNI 支援 NetworkPolicy 才生效）。
+
+### 排程的執行依賴
+
+排程判斷全部在後端 Node.js 的 AutoDJ 排程器（每 5 秒一次），透過 Telnet 推送至
+Liquidsoap 的 `dynamic_queue`；`radio.liq` 本身只負責播放佇列與轉場，不含任何時段邏輯。
+這確保後台改排程立即生效、不需重載 Liquidsoap。
+
+代價是 **`server` Pod 停止時排程會失效**：廣播不會中斷（`dynamic_queue` 為空時自動
+fallback 到 A 歌單隨機播放），但會安靜地退化成只播 A，沒有任何外顯錯誤。
+建議將 `server` 的 `/health` 納入監控告警。
 
 ---
 

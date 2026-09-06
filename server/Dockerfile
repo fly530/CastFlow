@@ -5,7 +5,7 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++ zip unzip
 
 COPY package*.json ./
-RUN npm install --omit=dev && apk del python3 make g++
+RUN npm ci --omit=dev && apk del python3 make g++
 
 COPY src/ ./src/
 

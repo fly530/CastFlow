@@ -60,11 +60,13 @@ spec:
           value: "icecast"
         - name: ICECAST_PORT
           value: "8000"
-        - name: ICECAST_PASSWORD
+        # 推流用的是 Icecast 的 source-password，與 30-icecast.yaml 同一個 Secret key。
+        # 兩邊必須指向同一把，否則 liquidsoap 推流被回 401，/stream 全啞（HLS 仍正常，難察覺）。
+        - name: ICECAST_SOURCE_PASSWORD
           valueFrom:
             secretKeyRef:
               name: castflow-secrets
-              key: icecast-password
+              key: icecast-source-password
         - name: ICECAST_MOUNT
           value: "stream"
         - name: MUSIC_DIR

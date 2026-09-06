@@ -27,6 +27,25 @@ jobs:
         run: |
           kubectl apply --dry-run=client -f k8s/
 
+      # radio.liq 有兩份：liquidsoap/radio.liq（Compose 掛載）與 k8s/10-configmap.yaml
+      # 內嵌的那份。只改一邊會讓 Compose 與 K8s 的播放行為分歧，而且不會有任何錯誤訊息。
+      - name: Verify radio.liq Is In Sync Between Compose And ConfigMap
+        run: |
+          sed -n '/radio.liq: |/,$p' k8s/10-configmap.yaml | tail -n +2 | sed 's/^    //' > /tmp/configmap-radio.liq
+          if ! diff -u liquidsoap/radio.liq /tmp/configmap-radio.liq; then
+            echo "::error::liquidsoap/radio.liq 與 k8s/10-configmap.yaml 內嵌的版本不一致，兩邊都要改。"
+            exit 1
+          fi
+
+      # 15-secret.yaml 若以 .yaml 存在，就會被 `kubectl apply -f k8s/` 套用，
+      # 把版控裡的佔位金鑰裝進叢集。必須維持 .yaml.example。
+      - name: Ensure No Committed Secret Manifest
+        run: |
+          if ls k8s/*secret*.yaml >/dev/null 2>&1; then
+            echo "::error::k8s/ 底下不得有會被 apply 的 Secret 清單，請改用 .yaml.example。"
+            exit 1
+          fi
+
   security-audit:
     name: Security Audit & Code Build
     runs-on: ubuntu-latest

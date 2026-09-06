@@ -6,9 +6,10 @@ services:
     expose:
       - "8000"
     environment:
+      # libretime/icecast 只認 ICECAST_SOURCE_PASSWORD / ICECAST_RELAY_PASSWORD /
+      # ICECAST_ADMIN_PASSWORD 等變數；ICECAST_PASSWORD 會被無聲丟棄。
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD}
-      - ICECAST_PASSWORD=${ICECAST_PASSWORD}
 
   liquidsoap:
     image: savonet/liquidsoap:v2.2.5
@@ -21,7 +22,7 @@ services:
     environment:
       - ICECAST_HOST=icecast
       - ICECAST_PORT=8000
-      - ICECAST_PASSWORD=${ICECAST_PASSWORD}
+      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD}
       - ICECAST_MOUNT=stream
       - MUSIC_DIR=/music
       - HLS_DIR=/output/hls

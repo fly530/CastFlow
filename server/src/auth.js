@@ -4,13 +4,36 @@ import crypto from 'crypto';
 import { findUserByUsername, updateUserPassword } from './db.js';
 
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET || JWT_SECRET.trim() === '') {
+
+// 曾經或可能出現在文件、範本、教學裡的佔位字串。
+// 只擋空值是不夠的：這些字串都在公開 repo 裡，任何人都查得到，
+// 用它們當簽章金鑰等於沒有驗證 —— 而且「有設值」會讓人以為安全，比留空更危險。
+const KNOWN_PLACEHOLDER_SECRETS = [
+  'change-this-in-production-use-openssl-rand-hex-32',
+  'castflow_jwt_secret_key_2026',
+  'your_super_secret_jwt_key_please_change_with_openssl_rand_hex_32',
+  'changeme',
+  'change-me',
+  'secret',
+];
+
+function rejectStartup(reason) {
   console.error('================================================================');
-  console.error(' [FATAL SECURITY ERROR] JWT_SECRET 未設定！');
-  console.error(' 為了防止管理權限遭非法偽造，CastFlow 拒絕使用預設金鑰啟動。');
-  console.error(' 請於環境變數中提供高強度金鑰 (例如: openssl rand -hex 32 或設定 .env)。');
+  console.error(' [FATAL SECURITY ERROR] JWT_SECRET ' + reason);
+  console.error(' 為了防止管理權限遭非法偽造，CastFlow 拒絕啟動。');
+  console.error(' 請提供高強度隨機金鑰：openssl rand -hex 32');
   console.error('================================================================');
   process.exit(1);
+}
+
+if (!JWT_SECRET || JWT_SECRET.trim() === '') {
+  rejectStartup('未設定！');
+}
+if (KNOWN_PLACEHOLDER_SECRETS.includes(JWT_SECRET.trim().toLowerCase())) {
+  rejectStartup('仍是文件中的公開佔位值，任何人都能偽造管理員憑證！');
+}
+if (JWT_SECRET.trim().length < 32) {
+  rejectStartup('長度不足 32 字元，強度不夠！');
 }
 
 /**
