@@ -172,7 +172,9 @@ export default function UnifiedPlayerCard({
     if (!Hls.isSupported()) {
       if (audio.canPlayType('application/vnd.apple.mpegurl')) {
         audio.src = hlsStreamUrl;
-        logEvent('INFO', 'NATIVE_HLS_ATTACHED', '使用 Safari/iOS 原生 HLS 解碼器');
+        audio.preload = 'auto';
+        audio.load();
+        logEvent('INFO', 'NATIVE_HLS_ATTACHED', '使用 Safari/iOS 原生 HLS 解碼器並已啟動預載');
       } else {
         logEvent('WARN', 'HLS_UNSUPPORTED', '瀏覽器不支援 HLS，建議切換為 Icecast MP3 模式');
       }
@@ -332,11 +334,21 @@ export default function UnifiedPlayerCard({
             if (!hlsRef.current) {
               initHls(audio);
             } else {
-              hlsRef.current.loadSource(hlsStreamUrl);
+              // 保持已預載好的緩衝切片，避免呼叫 loadSource() 沖刷掉緩衝
               hlsRef.current.startLoad();
+
+              // 若停留頁面過久才播放，自動校準至最新 Live Edge 避免脫離直播窗口
+              if (audio.seekable && audio.seekable.length > 0) {
+                const liveEnd = audio.seekable.end(audio.seekable.length - 1);
+                if (liveEnd - audio.currentTime > 24) {
+                  audio.currentTime = Math.max(0, liveEnd - 12);
+                }
+              }
             }
           } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-            audio.src = `${hlsStreamUrl}?t=${Date.now()}`;
+            if (!audio.src || !audio.src.includes(hlsStreamUrl)) {
+              audio.src = hlsStreamUrl;
+            }
           }
         } else {
           if (!audio.src || !audio.src.includes(mp3StreamUrl)) {
@@ -461,9 +473,10 @@ export default function UnifiedPlayerCard({
 
   return (
     <div className="w-full max-w-6xl mx-auto" ref={cardRef}>
-      {/* 隱藏原生 Audio 標籤 (掛載嚴謹診斷監聽器) */}
+      {/* 隱藏原生 Audio 標籤 (掛載嚴謹診斷監聽器，啟用 preload="auto" 達成秒開零等待) */}
       <audio
         ref={audioRef}
+        preload="auto"
         onWaiting={handleWaiting}
         onPlaying={handlePlaying}
         onStalled={handleStalled}
