@@ -134,17 +134,15 @@ export default function NowPlayingControl({
         {/* ================= 左側：正在播放 (Now Playing) ================= */}
         <div className="lg:col-span-7 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-slate-800/80 pb-6 lg:pb-0 lg:pr-6">
           <div>
-            {/* 頂部即時廣播狀態徽章與電台監聽器 */}
+            {/* 頂部即時播送標題與電台監聽器 */}
             <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-bold tracking-wider uppercase px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5 shadow-sm">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                  <Radio className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>ON-AIR</span>
-                </span>
-                <span className="text-[10px] font-mono text-slate-400 px-2 py-0.5 rounded-md bg-slate-800/80">
-                  MP3 {bitrate || 256}kbps CBR
-                </span>
+                <div className="p-1.5 rounded-lg bg-purple-500/10 text-purple-400">
+                  <Radio className="w-4 h-4" />
+                </div>
+                <h3 className="text-xs font-bold text-slate-200 tracking-wide">
+                  正在現場播送 (Now Playing)
+                </h3>
               </div>
 
               {/* 實時監聽廣播按鈕 (支援立即轉圈圈緩衝反饋) */}
