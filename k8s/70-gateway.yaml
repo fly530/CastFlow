@@ -160,12 +160,12 @@ metadata:
   labels:
     app: gateway
 spec:
-  # 適用於 K3s (內建 ServiceLB) 及雲端 Kubernetes 平台 (GKE/EKS/AKS)
-  # 若在純自建裸機環境，亦可改為 NodePort
-  type: LoadBalancer
+  # 採用標準 ClusterIP 透過 Ingress 統一反向代理暴露，不搶佔節點實體埠號，完美避免 Port 衝突
+  # 若叢集無 Ingress Controller 且欲直接透過節點 IP 存取，可切換為 NodePort
+  type: ClusterIP
   selector:
     app: gateway
   ports:
   - port: 80
-    targetPort: 8080   # 容器內是 8080（非 root nginx），對外仍是 80
+    targetPort: 8080   # 容器內是 8080（非 root nginx），Service 對內提供 80
     name: http

@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-ingress
+  namespace: castflow
+  labels:
+    app: gateway
+  annotations:
+    # Traefik (K3s 內建) 入口設定
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    # Nginx Ingress Controller 相容設定 (放行大曲目檔案上傳與長連線)
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  rules:
+  # 預設網域名稱，使用者可自行替換為自己的網域（如 radio.example.com）
+  # 亦可在本機 hosts 加入：<K8s節點IP> castflow.local
+  - host: castflow.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: gateway
+            port:
+              number: 80

@@ -172,10 +172,8 @@ kubectl apply -k k8s/
 kubectl -n castflow logs deploy/server | grep -A4 "CastFlow Security"
 ```
 
-> **External access**: the Service in `70-gateway.yaml` defaults to `type: LoadBalancer`.
-> On clusters without a LoadBalancer controller — K3s installed with `--disable servicelb`,
-> or plain bare-metal — the EXTERNAL-IP stays `<pending>` forever and nothing can reach it.
-> Switch it to `type: NodePort` and point your existing reverse proxy at that port.
+> **External access**: the Service in `70-gateway.yaml` uses standard `type: ClusterIP`, routed via `80-ingress.yaml` through the cluster's Ingress Controller (e.g. Traefik in K3s, Nginx Ingress) on standard **Port 80**. The default host is `castflow.local` (map `<node-ip> castflow.local` in `/etc/hosts` or change to your custom domain).
+> On clusters without an Ingress controller where direct IP access is preferred, switch `70-gateway.yaml` to `type: NodePort`.
 
 > **Updating images**: the manifests use `:latest` with `imagePullPolicy: IfNotPresent`.
 > Rebuilding the same tag does **not** trigger a rollout; run
@@ -185,12 +183,13 @@ kubectl -n castflow logs deploy/server | grep -A4 "CastFlow Security"
 Included manifests:
 * `00-namespace.yaml`: Creates the dedicated `castflow` namespace.
 * `10-configmap.yaml`: Mounts dynamic Liquidsoap scripts (must stay byte-identical to `liquidsoap/radio.liq`; enforced in CI).
-* `15-secret.yaml.example`: Secret template and generation commands. **Deliberately not `.yaml`**, so placeholder credentials can never be applied by `kubectl apply -f k8s/`.
+* `15-secret.yaml.example`: Secret template and generation commands. **Deliberately not `.yaml`**, so placeholder credentials can never be applied by `kubectl apply -k k8s/`.
 * `20-pvc.yaml`: PersistentVolumeClaims for audio files, database, and backups (ReadWriteOnce for local-path).
 * `30-icecast.yaml`: Icecast audio streaming server deployment.
 * `50-service.yaml`: Core internal ClusterIP service routing (icecast & liquidsoap).
 * `60-server.yaml`: Backend Node.js API server Deployment & Service.
-* `70-gateway.yaml`: Unified Gateway + Liquidsoap core (Multi-container Pod sharing in-memory tmpfs emptyDir + LoadBalancer Service).
+* `70-gateway.yaml`: Unified Gateway + Liquidsoap core (Multi-container Pod sharing in-memory tmpfs emptyDir + ClusterIP Service).
+* `80-ingress.yaml`: Standard Kubernetes Ingress routing rules (supports Traefik & Nginx-Ingress, default host `castflow.local`).
 * `90-networkpolicy.yaml`: Restricts the Liquidsoap Telnet port (1234) to the `server` Pod (requires a NetworkPolicy-capable CNI).
 
 ### Scheduling runtime dependency

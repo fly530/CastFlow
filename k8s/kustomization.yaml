@@ -27,4 +27,5 @@ resources:
   - 50-service.yaml
   - 60-server.yaml
   - 70-gateway.yaml
+  - 80-ingress.yaml
   - 90-networkpolicy.yaml
