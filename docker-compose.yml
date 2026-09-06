@@ -3,8 +3,8 @@ services:
     image: moul/icecast:latest
     container_name: castflow-icecast
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       - ICECAST_SOURCE_PASSWORD=hackme
       - ICECAST_ADMIN_PASSWORD=hackme
@@ -16,8 +16,8 @@ services:
     restart: unless-stopped
     depends_on:
       - icecast
-    ports:
-      - "1234:1234"
+    expose:
+      - "1234"
     environment:
       - ICECAST_HOST=icecast
       - ICECAST_PORT=8000
@@ -40,8 +40,8 @@ services:
     depends_on:
       - liquidsoap
       - icecast
-    ports:
-      - "3001:3001"
+    expose:
+      - "3001"
     environment:
       - PORT=3001
       - LIQUIDSOAP_HOST=liquidsoap
