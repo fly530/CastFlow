@@ -87,6 +87,15 @@ jobs:
           cd frontend
           npm audit --omit=dev --audit-level=high
 
+      # ★ npm audit 只看依賴的已知漏洞，看不到自己寫的程式碼。
+      # 2026-09-06 修掉的四個問題（命令注入、路徑穿越、任意刪除、root 執行）
+      # audit 一個都抓不到 —— CI 綠不代表程式碼乾淨。這一步才是那四項的防線。
+      - name: Backend Security Regression Tests
+        run: |
+          cd server
+          npm ci
+          npm test
+
       - name: Build and Verify Frontend
         run: |
           cd frontend
