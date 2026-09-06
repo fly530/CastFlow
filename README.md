@@ -163,10 +163,10 @@ kubectl -n castflow create secret generic castflow-secrets \
   --from-literal=icecast-admin-password="$(openssl rand -hex 16)"
 
 # 3. Validate manifest syntax
-kubectl apply --dry-run=client -f k8s/
+kubectl apply -k k8s/ --dry-run=client
 
 # 4. Deploy to Kubernetes cluster (default namespace: castflow)
-kubectl apply -f k8s/
+kubectl apply -k k8s/
 
 # 5. Read the generated initial admin password
 kubectl -n castflow logs deploy/server | grep -A4 "CastFlow Security"

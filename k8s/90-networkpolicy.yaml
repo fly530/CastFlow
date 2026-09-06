@@ -34,7 +34,7 @@ spec:
       ports:
         - protocol: TCP
           port: 1234
-    # 2) HTTP 80：對外入口，不限制來源（Ingress / NodePort / LoadBalancer 都要進得來）
+    # 2) HTTP 8080：gateway 容器監聽 8080（Service 80 targetPort: 8080），對外入口不限制來源
     - ports:
         - protocol: TCP
-          port: 80
+          port: 8080

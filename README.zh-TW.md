@@ -161,10 +161,10 @@ kubectl -n castflow create secret generic castflow-secrets \
   --from-literal=icecast-admin-password="$(openssl rand -hex 16)"
 
 # 3. 預先驗證部署清單語法
-kubectl apply --dry-run=client -f k8s/
+kubectl apply -k k8s/ --dry-run=client
 
 # 4. 部署至 K8s 叢集 (預設命名空間: castflow)
-kubectl apply -f k8s/
+kubectl apply -k k8s/
 
 # 5. 取得首次登入的管理員隨機密碼
 kubectl -n castflow logs deploy/server | grep -A4 "CastFlow Security"
