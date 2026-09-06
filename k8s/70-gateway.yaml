@@ -35,6 +35,33 @@ spec:
           limits:
             cpu: 500m
             memory: 256Mi
+        # ★ startupProbe 探的是「HLS 真的產出來了」，不是「nginx 活著」。
+        #
+        # 沒有這個探針時 rollout 的失敗序列是：
+        #   1. 新 pod 啟動，nginx 一秒內回 200
+        #   2. readinessProbe 探 / → 判定就緒
+        #   3. k8s 開始終止舊 pod
+        #   4. 但同 pod 的 liquidsoap 還沒接上 Icecast、tmpfs 裡一個切片都沒有
+        #   5. 聽眾被導到一個空的 HLS 目錄
+        #
+        # 探針探的東西，跟服務真正提供的東西不是同一件事。多容器 Pod 的
+        # 就緒判斷必須反映整個 Pod 的服務能力，不能只探最快就緒的那個容器。
+        #
+        # 為什麼是 startupProbe 而不是把 readinessProbe 改成探這個路徑：
+        # readinessProbe 探 /hls/live.m3u8 的話，日後 liquidsoap 任何時候掛掉，
+        # 整個 gateway 都會被踢出 Service —— 連管理後台都進不去，而那正是
+        # 用來診斷的地方。startupProbe 只在啟動階段生效，成功一次後就交還給
+        # readinessProbe，剛好只解決 rollout 這個場景，沒有副作用。
+        #
+        # 音樂庫是空的也不會卡住：radio.liq 的 mksafe 會補靜音，切片照樣產生。
+        startupProbe:
+          httpGet:
+            path: /hls/live.m3u8
+            port: 80
+          periodSeconds: 5
+          failureThreshold: 30    # 150 秒；liquidsoap 啟動 + 首個切片通常 10~30 秒
+
+        # startupProbe 成功後才開始執行。探 / 而非 /hls/，理由見上。
         readinessProbe:
           httpGet:
             path: /
