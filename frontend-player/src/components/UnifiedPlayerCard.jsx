@@ -18,6 +18,7 @@ import {
   Clock,
   Sparkles
 } from 'lucide-react';
+import CastFlowLogo from './CastFlowLogo';
 
 export default function UnifiedPlayerCard({
   currentTrack,
@@ -484,8 +485,8 @@ export default function UnifiedPlayerCard({
         <div className="flex items-center justify-between gap-4 pb-6 border-b border-slate-800/60 relative z-10 flex-wrap sm:flex-nowrap">
           {/* 左側：電台識別 */}
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/30 ring-1 ring-white/20">
-              <Radio className="w-5 h-5 text-white" />
+            <div className="w-10 h-10 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center shadow-lg shadow-indigo-500/20 ring-1 ring-white/10">
+              <img src="/radio.svg" alt="Logo" className="w-6 h-6" />
             </div>
             <div>
               <h1 className="text-lg sm:text-xl font-bold tracking-tight bg-gradient-to-r from-white via-slate-100 to-slate-300 bg-clip-text text-transparent">
@@ -567,8 +568,7 @@ export default function UnifiedPlayerCard({
                     alt={currentTrack?.title || 'Album Cover'}
                     className="w-full h-full object-cover select-none pointer-events-none"
                     onError={(e) => {
-                      e.target.src =
-                        'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect fill="%231e1b4b" width="200" height="200"/><circle cx="100" cy="100" r="50" fill="%234338ca" opacity="0.6"/><text fill="%23ffffff" font-size="16" font-weight="bold" x="50%" y="50%" text-anchor="middle" dominant-baseline="middle">CastFlow</text></svg>';
+                      e.target.src = '/radio.svg';
                     }}
                   />
 
