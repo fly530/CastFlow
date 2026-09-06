@@ -1,7 +1,7 @@
 # ==========================================
 # Stage 1: Build Unified Frontend (單一整合前端)
 # ==========================================
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm install
