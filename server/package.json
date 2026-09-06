@@ -13,10 +13,10 @@
     "better-sqlite3": "^9.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
+    "express": "^5.2.1",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.0",
-    "music-metadata": "^7.14.0",
+    "music-metadata": "^11.15.0",
     "ws": "^8.18.0"
   },
   "license": "MIT"

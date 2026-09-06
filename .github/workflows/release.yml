@@ -27,8 +27,41 @@ jobs:
         run: |
           kubectl apply --dry-run=client -f k8s/
 
+  security-audit:
+    name: Security Audit & Code Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: |
+            server/package-lock.json
+            frontend/package-lock.json
+
+      - name: Audit Backend Dependencies
+        run: |
+          cd server
+          npm audit --audit-level=high
+
+      - name: Audit Frontend Production Dependencies
+        run: |
+          cd frontend
+          npm audit --omit=dev --audit-level=high
+
+      - name: Build and Verify Frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
   build-containers:
     name: Build Docker Containers
+    needs: [security-audit, validate-k8s]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
