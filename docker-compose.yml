@@ -1,6 +1,6 @@
 services:
   icecast:
-    image: moul/icecast:latest
+    image: libretime/icecast:2.4.4-alpine
     container_name: castflow-icecast
     restart: unless-stopped
     expose:

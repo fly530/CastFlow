@@ -31,7 +31,7 @@ Based on a microservice architecture, CastFlow can be operated locally via Docke
 
 ## 3. Tech Stack
 * **Infrastructure**: Docker Compose / Kubernetes (K3s), modular YAMLs (namespace, pvc, configmap, deployment, service).
-* **Streaming Core**: `savonet/liquidsoap:v2.2.5`, `moul/icecast:latest`.
+* **Streaming Core**: `savonet/liquidsoap:v2.2.5`, `libretime/icecast:2.4.4-alpine`.
 * **Backend API**: Node.js (Express), SQLite (better-sqlite3 WAL), WebSocket (`ws`), JWT (`jsonwebtoken`), `music-metadata`.
 * **Frontend**: React 18, Vite, TailwindCSS, Lucide Icons, HLS.js.
 * **Licensing**: Custom frontend and backend code is released under the MIT License; GPL components are isolated across container boundaries.

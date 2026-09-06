@@ -31,7 +31,7 @@
 
 ## 3. 技術棧 (Tech Stack)
 * **基礎設施**：Docker Compose / Kubernetes (K3s)，標準分離 YAML（namespace, pvc, configmap, deployment, service）。
-* **廣播底層**：`savonet/liquidsoap:v2.2.5` (引擎), `moul/icecast:latest` (分發)。
+* **廣播底層**：`savonet/liquidsoap:v2.2.5` (排程與混音核心), `libretime/icecast:2.4.4-alpine` (MP3 串流廣播分發)。
 * **後端 API**：Node.js (Express), SQLite (better-sqlite3 WAL), WebSocket (`ws`), JWT (`jsonwebtoken`), `music-metadata`。
 * **前端 UI**：React 18, Vite, TailwindCSS, Lucide Icons, HLS.js。
 * **授權**：自研前端與後端採用 MIT 授權開源；底層 GPL 組件於容器邊界隔離。

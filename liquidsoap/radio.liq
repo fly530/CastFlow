@@ -20,56 +20,20 @@ icecast_pass = environment.get(default="hackme", "ICECAST_PASSWORD")
 icecast_mount= environment.get(default="stream", "ICECAST_MOUNT")
 hls_dir      = environment.get(default="/output/hls", "HLS_DIR")
 
-# 3. 歌單定義 (A ~ G 歌單，打亂順序，自動監聽檔案夾更新)
-# 通用規則：所有歌單讀取時皆以 mode="randomize" 進行隨機打亂 (shuffle)
-playlist_a = playlist(id="playlist_a", reload_mode="watch", mode="randomize", "#{music_dir}/A")
-playlist_b = playlist(id="playlist_b", reload_mode="watch", mode="randomize", "#{music_dir}/B")
-playlist_c = playlist(id="playlist_c", reload_mode="watch", mode="randomize", "#{music_dir}/C")
-playlist_d = playlist(id="playlist_d", reload_mode="watch", mode="randomize", "#{music_dir}/D")
-playlist_e = playlist(id="playlist_e", reload_mode="watch", mode="randomize", "#{music_dir}/E")
-playlist_f = playlist(id="playlist_f", reload_mode="watch", mode="randomize", "#{music_dir}/F")
-playlist_g = playlist(id="playlist_g", reload_mode="watch", mode="randomize", "#{music_dir}/G")
-
-# 4. 關鍵業務邏輯與排程規則 (Business Logic)
-# 4.1 預設日常時段：每 3 首 A 歌單，插播 1 首 B 歌單 (rotate weights 3:1)
-daily_stream = rotate(weights=[3, 1], [playlist_a, playlist_b])
-
-# 4.2 夜間時段 (22:00 ~ 23:00)：A 歌單與 G 歌單 1:1 輪替
-night_stream = rotate(weights=[1, 1], [playlist_a, playlist_g])
-
-# 4.3 每小時循環：整點等待目前歌曲播畢後，插播 1 首 C 歌單
-last_hourly_c_hour = ref(-1)
-def hourly_c_condition() =
-  t = time.local()
-  # 於每小時初（0 ~ 10 分鐘內），若本小時尚未播放過 C 歌單則觸發
-  if t.min < 10 and last_hourly_c_hour() != t.hour then
-    true
-  else
-    false
-  end
-end
-
-hourly_c = source.on_track(playlist_c, fun (_) -> last_hourly_c_hour := time.local().hour)
-
-# 4.4 特定時段插播 (21:30 ~ 22:00 等時段單曲切換)
-# 所有切換皆設 track_sensitive=true，確保等待當前歌曲完整播完才無縫切換
-scheduled_stream = switch(track_sensitive=true, [
-  (hourly_c_condition, hourly_c),
-  ({ 21h30 - 21h40 }, playlist_d),
-  ({ 21h40 - 21h50 }, playlist_e),
-  ({ 21h50 - 22h00 }, playlist_f),
-  ({ 22h00 - 23h00 }, night_stream),
-  ({ true }, daily_stream)
-])
-
-# 4.5 動態佇列 (由後端 AutoDJ 智慧排程器透過 Telnet 優先推送)
+# 3. 動態待播佇列 (優先播放源)
+# 【單一事實來源原則 Single Source of Truth】：
+# 所有業務排程 (權重輪播、整點插播、閉店前倒數、間隔插播) 皆由 SQLite 資料庫
+# 與後端 Node.js AutoDJ 智慧排程器統一決策，並透過 Telnet 推送至此佇列。
 dynamic_queue = request.queue(id="dynamic_queue")
 
-# 混合排程：若 dynamic_queue 有歌曲則優先播放，隊列為空自動回退至常規排程
-mixed_stream = fallback(track_sensitive=true, [dynamic_queue, scheduled_stream])
+# 4. 保底安全音訊源 (Safety Fallback)
+# 當 Node.js 伺服器冷啟動、重啟或佇列短暫為空時自動接管，防止電台斷流空轉。
+fallback_stream = playlist(id="fallback_stream", reload_mode="watch", mode="randomize", "#{music_dir}/A")
+
+# 混合排程：優先播放動態佇列，若隊列為空自動無縫切換至保底音源
+mixed_stream = fallback(track_sensitive=true, [dynamic_queue, fallback_stream])
 
 # 5. 平滑淡入淡出轉場 (crossfade with smooth envelope & anti-clipping)
-# 停用不穩定的 smart 分析，採用預測且連續的平滑淡出與淡入，保證無破音無斷裂
 faded_stream = crossfade(
   smart=false,
   duration=3.0,
@@ -79,10 +43,10 @@ faded_stream = crossfade(
   mixed_stream
 )
 
-# 透過廣播級 Limiter 限制器防止淡入淡出時雙軌疊加音量超過 0dBFS 導致數位破音 (爆音)
+# 透過廣播級 Limiter 限制器防止淡入淡出時雙軌疊加音量超過 0dBFS 導致數位爆音
 limited_radio = limit(threshold=-1.0, attack=20.0, release=150.0, faded_stream)
 
-# 確保輸出安全（若暫無音樂自動補靜音，防止廣播程序中斷崩潰）
+# 確保輸出安全（若暫無音樂自動補靜音，防止廣播程序崩潰）
 final_radio = mksafe(limited_radio)
 
 # 6. 自訂註冊 Telnet 指令 (提供後端管理面板查詢與調用)
@@ -91,15 +55,9 @@ server.register(namespace="radio", description="平滑淡出切換至下一首�
   dynamic_queue.skip()
   "OK: Skipped dynamic queue"
 end)
-server.register(namespace="radio", description="強制重新掃描並載入所有歌單資料夾", "reload_all", fun (_) -> begin
-  playlist_a.reload()
-  playlist_b.reload()
-  playlist_c.reload()
-  playlist_d.reload()
-  playlist_e.reload()
-  playlist_f.reload()
-  playlist_g.reload()
-  "OK: All playlists (A-G) reloaded"
+server.register(namespace="radio", description="強制重新載入保底歌單資料夾", "reload_all", fun (_) -> begin
+  fallback_stream.reload()
+  "OK: Fallback stream reloaded"
 end)
 
 # 7. 雙軌輸出 (Dual Output)

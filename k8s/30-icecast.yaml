@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: icecast
-        image: moul/icecast:latest
+        image: libretime/icecast:2.4.4-alpine
         imagePullPolicy: IfNotPresent
         env:
         - name: ICECAST_SOURCE_PASSWORD
