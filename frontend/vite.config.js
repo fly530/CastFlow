@@ -11,10 +11,9 @@ export default defineConfig({
         target: process.env.VITE_API_URL || 'http://localhost:3001',
         changeOrigin: true
       },
-      '/hls': {
-        target: process.env.VITE_HLS_URL || 'http://localhost:8088',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/hls/, '')
+      '/ws': {
+        target: process.env.VITE_WS_URL || 'ws://localhost:3001',
+        ws: true
       }
     }
   }

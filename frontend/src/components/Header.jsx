@@ -21,7 +21,8 @@ export default function Header({
   onOpenLogin,
   onOpenChangePassword,
   onOpenBackups,
-  onLogout
+  onLogout,
+  onSwitchToPlayer
 }) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef(null);
@@ -128,16 +129,14 @@ export default function Header({
           </button>
 
           {/* 開啟聽眾播放器 */}
-          <a
-            href="/"
-            target="_blank"
-            rel="noreferrer"
+          <button
+            onClick={onSwitchToPlayer}
             className="flex items-center gap-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-semibold shadow-lg shadow-purple-500/20 transition-all active:scale-95"
+            title="切換至黑膠唱片聽眾播放器"
           >
             <Headphones className="w-3.5 h-3.5" />
             <span>聽眾前台</span>
-            <ExternalLink className="w-3 h-3 opacity-70" />
-          </a>
+          </button>
 
           {/* 最右側：精緻小型使用者頭像 */}
           <div className="relative ml-0.5" ref={userMenuRef}>

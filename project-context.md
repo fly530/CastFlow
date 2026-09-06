@@ -45,9 +45,9 @@
 ## 5. 專案目錄結構 (Directory Structure)
 ```plaintext
 /k8s                  # K3s / Kubernetes 部署 YAML (00-namespace 至 80-admin)
+/gateway              # 統一 Nginx 網關與反向代理服務
 /server               # 後端 API 與 WebSocket 服務 (Node.js)
-/frontend-admin       # 管理者控制後台 (React + TailwindCSS)
-/frontend-player      # 聽眾播放器 (React + HLS.js)
+/frontend             # 單一統合前端 (React + TailwindCSS + HLS.js，雙視圖切換)
 /liquidsoap           # Liquidsoap radio.liq 核心腳本
 /music                # 共享音訊資料夾 (A~G 歌單、SQLite radio.db、backups)
 docker-compose.yml    # 本地開發與單機生產環境配置

@@ -46,6 +46,6 @@
 
 ## 4. 授權邊界與容器隔離說明 (License & Architectural Boundary)
 
-1. **自研程式碼**：CastFlow 自行研發之應用層程式碼，包含後端服務（`/server`）、管理面板（`/frontend-admin`）與聽眾播放器（`/frontend-player`）均以 **MIT License** 授權開源。
+1. **自研程式碼**：CastFlow 自行研發之應用層程式碼，包含後端服務（`/server`）與整合式前後台（`/frontend`）均以 **MIT License** 授權開源。
 2. **容器邊界與隔離**：底層音訊引擎（Liquidsoap 與 Icecast）具有 GPL 授權相容性規範。CastFlow 嚴格遵循雲原生微服務標準，所有模組運行於各自獨立的容器（Container）或 Pod 中。後端僅透過標準 TCP 網路協議（Telnet 介面與 HTTP JSON API）調用廣播引擎，保持架構與授權層面的乾淨隔離。
 3. **法律免責**：關於音訊內容版權責任、公播授權與軟體無擔保條款，請詳閱 [DISCLAIMER.zh-TW.md](DISCLAIMER.zh-TW.md)。

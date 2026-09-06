@@ -45,10 +45,10 @@ Based on a microservice architecture, CastFlow can be operated locally via Docke
 ## 5. Directory Structure
 ```plaintext
 /k8s                  # K3s / Kubernetes manifests (00-namespace through 80-admin)
-/server               # Backend API and WebSocket server (Node.js)
-/frontend-admin       # Administrator dashboard (React + TailwindCSS)
-/frontend-player      # Listener web player (React + HLS.js)
-/liquidsoap           # Liquidsoap radio.liq script
-/music                # Shared volume (Playlists A~G, SQLite radio.db, backups)
-docker-compose.yml    # Docker Compose configuration for local dev and standalone deployment
+/gateway              # Unified Nginx Gateway & reverse proxy service
+/server               # Backend API & WebSocket service (Node.js)
+/frontend             # Unified Frontend (React + TailwindCSS + HLS.js, dual view switcher)
+/liquidsoap           # Liquidsoap radio.liq core script
+/music                # Shared audio storage (A~G playlists, SQLite radio.db, backups)
+docker-compose.yml    # Local development & standalone production compose
 ```

@@ -24,8 +24,9 @@ export default function UnifiedPlayerCard({
   currentTrack,
   upcoming = [],
   online = false,
-  bitrate = 128,
-  onOpenInfoModal
+  onOpenInfoModal,
+  onSwitchToAdmin,
+  currentUser
 }) {
   const audioRef = useRef(null);
   const hlsRef = useRef(null);
@@ -597,15 +598,20 @@ export default function UnifiedPlayerCard({
             </button>
 
             {/* 前往管理後台 */}
-            <a
-              href="/admin/"
-              target="_blank"
-              rel="noreferrer"
-              className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 rounded-full transition-colors"
-              title="進入管理後台"
+            <button
+              onClick={onSwitchToAdmin}
+              className="p-2 text-slate-400 hover:text-purple-400 hover:bg-slate-800/80 rounded-full transition-colors flex items-center gap-1 text-xs"
+              title={currentUser ? `已登入 (${currentUser.username}) - 進入管理控制台` : "管理中心登入"}
             >
-              <ExternalLink className="w-4 h-4" />
-            </a>
+              {currentUser ? (
+                <span className="flex items-center gap-1.5 text-purple-400 font-semibold px-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  管理後台
+                </span>
+              ) : (
+                <ExternalLink className="w-4 h-4" />
+              )}
+            </button>
           </div>
         </div>
 

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Lock, KeyRound, User, AlertCircle, ShieldAlert, Radio, ArrowRight, Github } from 'lucide-react';
 import { login } from '../utils/api.js';
 
-export default function LoginPage({ onLoginSuccess }) {
+export default function LoginPage({ onLoginSuccess, onSwitchToPlayer }) {
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -49,14 +49,14 @@ export default function LoginPage({ onLoginSuccess }) {
           </div>
         </div>
 
-        <a
-          href="/"
+        <button
+          onClick={onSwitchToPlayer}
           className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-purple-300 transition-colors px-3 py-1.5 rounded-xl hover:bg-slate-900 border border-transparent hover:border-slate-800"
         >
           <Radio className="w-3.5 h-3.5" />
-          <span>開啟聽眾播放器</span>
+          <span>返回聽眾播放器</span>
           <ArrowRight className="w-3 h-3" />
-        </a>
+        </button>
       </div>
 
       {/* 中央登入卡片 */}

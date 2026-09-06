@@ -1,33 +1,20 @@
 # ==========================================
-# Stage 1: Build Player Frontend (聽眾前台)
+# Stage 1: Build Unified Frontend (單一整合前端)
 # ==========================================
-FROM node:20-alpine AS build-player
+FROM node:20-alpine AS build
 WORKDIR /app
-COPY frontend-player/package*.json ./
+COPY frontend/package*.json ./
 RUN npm install
-COPY frontend-player/ .
+COPY frontend/ .
 RUN npm run build
 
 # ==========================================
-# Stage 2: Build Admin Frontend (管理後台)
-# ==========================================
-FROM node:20-alpine AS build-admin
-WORKDIR /app
-COPY frontend-admin/package*.json ./
-RUN npm install
-COPY frontend-admin/ .
-RUN npm run build
-
-# ==========================================
-# Stage 3: Unified Gateway (單一 Nginx 網關)
+# Stage 2: Gateway Nginx (輕量發佈與反向代理)
 # ==========================================
 FROM nginx:alpine
 
-# 放置 Player 前台於根目錄
-COPY --from=build-player /app/dist /usr/share/nginx/html
-
-# 放置 Admin 後台於 /admin 子路徑
-COPY --from=build-admin /app/dist /usr/share/nginx/html/admin
+# 放置編譯後的單一 SPA 前端
+COPY --from=build /app/dist /usr/share/nginx/html
 
 # 複製 Nginx 統一網關配置
 COPY gateway/nginx.conf /etc/nginx/conf.d/default.conf

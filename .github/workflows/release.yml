@@ -44,16 +44,10 @@ jobs:
           push: false
           tags: castflow-server:latest
 
-      - name: Build Listener Player Image
+      - name: Build Unified Gateway Image
         uses: docker/build-push-action@v5
         with:
-          context: ./frontend-player
+          context: .
+          file: gateway/Dockerfile
           push: false
-          tags: castflow-player:latest
-
-      - name: Build Admin Dashboard Image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend-admin
-          push: false
-          tags: castflow-admin:latest
+          tags: castflow-gateway:latest

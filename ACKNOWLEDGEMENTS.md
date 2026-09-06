@@ -46,6 +46,6 @@
 
 ## 4. Licensing Boundary & Container Isolation
 
-1. **Original Application Code**: CastFlow's custom backend services (`/server`), admin console (`/frontend-admin`), and listener web player (`/frontend-player`) are distributed under the **MIT License**.
+1. **Original Application Code**: CastFlow's custom backend services (`/server`) and unified frontend (`/frontend`) are distributed under the **MIT License**.
 2. **Container Boundary & Isolation**: The underlying audio engines (Liquidsoap and Icecast) are subject to GPL licensing terms. CastFlow follows a strict cloud-native microservice pattern where every component executes inside isolated containers or Kubernetes pods. Communication between the backend and audio engine occurs solely via standard network protocols (Telnet TCP interface and HTTP JSON APIs), ensuring clean legal and architectural separation.
 3. **Legal Disclaimer**: For terms regarding audio copyright liability, public broadcast performance licensing, and software warranties, please refer to [DISCLAIMER.md](DISCLAIMER.md).

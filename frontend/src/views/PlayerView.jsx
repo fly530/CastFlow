@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import UnifiedPlayerCard from './components/UnifiedPlayerCard.jsx';
-import StreamInfoModal from './components/StreamInfoModal.jsx';
+import UnifiedPlayerCard from '../components/UnifiedPlayerCard.jsx';
+import StreamInfoModal from '../components/StreamInfoModal.jsx';
 
-export default function App() {
+export default function PlayerView({ currentUser, onSwitchToAdmin }) {
   const [statusData, setStatusData] = useState(null);
   const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
   const wsRef = useRef(null);
@@ -46,7 +46,6 @@ export default function App() {
         };
 
         ws.onclose = () => {
-          // 斷線後 3 秒自動嘗試重連
           reconnectTimeout = setTimeout(connectWS, 3000);
         };
 
@@ -60,7 +59,6 @@ export default function App() {
 
     connectWS();
 
-    // 備援長週期輪詢 (每 15 秒一次)
     const timer = setInterval(fetchStatus, 15000);
 
     return () => {
@@ -84,14 +82,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-3 sm:p-6 lg:p-8 relative overflow-x-hidden selection:bg-indigo-500 selection:text-white">
-      {/* 電視與大螢幕氛圍環境光暈 (Ambient Lighting) */}
+      {/* 氛圍環境光暈 (Ambient Lighting) */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute top-1/4 -left-32 w-96 h-96 bg-indigo-600/10 rounded-full blur-[128px]" />
         <div className="absolute bottom-1/4 -right-32 w-96 h-96 bg-purple-600/10 rounded-full blur-[128px]" />
         <div className="absolute -top-32 right-1/3 w-80 h-80 bg-pink-600/5 rounded-full blur-[128px]" />
       </div>
 
-      {/* 單一全整合式播放卡片 (電視螢幕高質感劇院呈現) */}
+      {/* 單一全整合式播放卡片 */}
       <main className="w-full relative z-10 my-auto">
         <UnifiedPlayerCard
           currentTrack={currentTrack}
@@ -99,6 +97,8 @@ export default function App() {
           online={online}
           bitrate={bitrate}
           onOpenInfoModal={() => setIsInfoModalOpen(true)}
+          onSwitchToAdmin={onSwitchToAdmin}
+          currentUser={currentUser}
         />
       </main>
 
@@ -111,4 +111,3 @@ export default function App() {
     </div>
   );
 }
-
