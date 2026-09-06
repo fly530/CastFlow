@@ -44,14 +44,7 @@
 
 ---
 
-## 4. 架構設計靈感 (Inspiration)
-
-* **[AzuraCast](https://www.azuracast.com/)** (GPL-3.0)  
-  功能完備的成熟開源電台管理軟體。CastFlow 源於對更輕量化、容器原生（Docker Compose / K3s / Kubernetes 導向）、配置完全透明可控且高度模組化的廣播架構之追求，AzuraCast 的優秀實踐給予本專案許多啟發。
-
----
-
-## 5. 授權邊界與容器隔離說明 (License & Architectural Boundary)
+## 4. 授權邊界與容器隔離說明 (License & Architectural Boundary)
 
 1. **自研程式碼**：CastFlow 自行研發之應用層程式碼，包含後端服務（`/server`）、管理面板（`/frontend-admin`）與聽眾播放器（`/frontend-player`）均以 **MIT License** 授權開源。
 2. **容器邊界與隔離**：底層音訊引擎（Liquidsoap 與 Icecast）具有 GPL 授權相容性規範。CastFlow 嚴格遵循雲原生微服務標準，所有模組運行於各自獨立的容器（Container）或 Pod 中。後端僅透過標準 TCP 網路協議（Telnet 介面與 HTTP JSON API）調用廣播引擎，保持架構與授權層面的乾淨隔離。

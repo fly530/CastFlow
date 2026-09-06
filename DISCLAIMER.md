@@ -42,4 +42,4 @@ CastFlow adheres to container isolation boundaries to ensure clean architectural
 
 ## 5. Trademarks Notice
 
-All third-party trademarks, service marks, trade names, product names, and logos cited within this project, documentation, or code (including but not limited to Liquidsoap, Icecast, AzuraCast, Kubernetes, K3s, Docker, ESP32, React, TailwindCSS, and Node.js) are the property of their respective owners. Any reference is made solely for descriptive, technical, and compatibility purposes, and does not imply endorsement, sponsorship, or affiliation.
+All third-party trademarks, service marks, trade names, product names, and logos cited within this project, documentation, or code (including but not limited to Liquidsoap, Icecast, Kubernetes, K3s, Docker, ESP32, React, TailwindCSS, and Node.js) are the property of their respective owners. Any reference is made solely for descriptive, technical, and compatibility purposes, and does not imply endorsement, sponsorship, or affiliation.

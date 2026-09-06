@@ -43,4 +43,4 @@
 
 ## 5. 商標聲明 (Trademarks Notice)
 
-本專案、文件或程式碼中提及之所有第三方商標、產品名稱、服務標章、組織名稱及標誌（包括但不限於 Liquidsoap, Icecast, AzuraCast, Kubernetes, K3s, Docker, ESP32, React, TailwindCSS, Node.js 等），皆為其各自法定所有者之財產。引用僅作為技術相容性或技術描述之客觀指稱，絕不代表上述商標持有者對本專案之背書、贊助或合作關係。
+本專案、文件或程式碼中提及之所有第三方商標、產品名稱、服務標章、組織名稱及標誌（包括但不限於 Liquidsoap, Icecast, Kubernetes, K3s, Docker, ESP32, React, TailwindCSS, Node.js 等），皆為其各自法定所有者之財產。引用僅作為技術相容性或技術描述之客觀指稱，絕不代表上述商標持有者對本專案之背書、贊助或合作關係。
