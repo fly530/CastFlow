@@ -10,6 +10,7 @@ import {
   LogIn,
   Users,
   FolderArchive,
+  Headphones
 } from 'lucide-react';
 
 export default function Header({
