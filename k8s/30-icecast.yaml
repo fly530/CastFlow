@@ -21,11 +21,20 @@ spec:
         imagePullPolicy: IfNotPresent
         env:
         - name: ICECAST_SOURCE_PASSWORD
-          value: "hackme"
+          valueFrom:
+            secretKeyRef:
+              name: castflow-secrets
+              key: icecast-source-password
         - name: ICECAST_ADMIN_PASSWORD
-          value: "hackme"
+          valueFrom:
+            secretKeyRef:
+              name: castflow-secrets
+              key: icecast-admin-password
         - name: ICECAST_PASSWORD
-          value: "hackme"
+          valueFrom:
+            secretKeyRef:
+              name: castflow-secrets
+              key: icecast-password
         ports:
         - containerPort: 8000
           name: stream

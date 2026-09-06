@@ -25,21 +25,34 @@ spec:
         env:
         - name: PORT
           value: "3001"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: castflow-secrets
+              key: jwt-secret
         - name: LIQUIDSOAP_HOST
-          value: "liquidsoap-svc"
+          value: "liquidsoap"
         - name: LIQUIDSOAP_PORT
           value: "1234"
         - name: ICECAST_HOST
-          value: "icecast-svc"
+          value: "icecast"
         - name: ICECAST_PORT
           value: "8000"
         - name: ICECAST_MOUNT
           value: "stream"
         - name: MUSIC_DIR
           value: "/music"
+        - name: DATA_DIR
+          value: "/data"
+        - name: BACKUP_DIR
+          value: "/backups"
         volumeMounts:
         - name: music-volume
           mountPath: "/music"
+        - name: data-volume
+          mountPath: "/data"
+        - name: backups-volume
+          mountPath: "/backups"
         resources:
           requests:
             cpu: 50m
@@ -63,11 +76,17 @@ spec:
       - name: music-volume
         persistentVolumeClaim:
           claimName: radio-music-pvc
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: radio-data-pvc
+      - name: backups-volume
+        persistentVolumeClaim:
+          claimName: radio-backups-pvc
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: server-svc
+  name: server
   namespace: castflow
   labels:
     app: server

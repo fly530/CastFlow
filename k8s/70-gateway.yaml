@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: castflow
+  labels:
+    app: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      containers:
+      - name: gateway
+        image: castflow-gateway:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 80
+          name: http
+        volumeMounts:
+        - name: hls-volume
+          mountPath: /usr/share/nginx/hls
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 2
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 15
+      volumes:
+      - name: hls-volume
+        persistentVolumeClaim:
+          claimName: radio-hls-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: castflow
+  labels:
+    app: gateway
+spec:
+  # 適用於 K3s (內建 ServiceLB) 及雲端 Kubernetes 平台 (GKE/EKS/AKS)
+  # 若在純自建裸機環境，可改為 NodePort 或搭配 Ingress Controller
+  type: LoadBalancer
+  selector:
+    app: gateway
+  ports:
+  - port: 80
+    targetPort: 80
+    name: http

@@ -21,11 +21,14 @@ spec:
         args: ["/etc/liquidsoap/radio.liq"]
         env:
         - name: ICECAST_HOST
-          value: "icecast-svc"
+          value: "icecast"
         - name: ICECAST_PORT
           value: "8000"
         - name: ICECAST_PASSWORD
-          value: "hackme"
+          valueFrom:
+            secretKeyRef:
+              name: castflow-secrets
+              key: icecast-password
         - name: ICECAST_MOUNT
           value: "stream"
         - name: MUSIC_DIR

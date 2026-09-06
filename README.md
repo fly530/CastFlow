@@ -133,11 +133,12 @@ kubectl apply -f k8s/
 Included manifests:
 * `00-namespace.yaml`: Creates the dedicated `castflow` namespace.
 * `10-configmap.yaml`: Mounts dynamic Liquidsoap scripts.
-* `20-pvc.yaml`: PersistentVolumeClaims for audio files and HLS segments.
+* `15-secret.yaml`: Secure credentials for JWT and Icecast.
+* `20-pvc.yaml`: PersistentVolumeClaims for audio files, HLS, database, and backups.
 * `30-icecast.yaml` & `40-liquidsoap.yaml`: Audio streaming and scheduling core deployments.
-* `45-web-hls.yaml`: Nginx HLS CORS web server.
-* `50-service.yaml`: ClusterIP service routes.
-* `60-server.yaml`, `70-player.yaml`, `80-admin.yaml`: Backend server and frontend web microservices.
+* `50-service.yaml`: Core internal ClusterIP service routing (icecast & liquidsoap).
+* `60-server.yaml`: Backend Node.js API server Deployment & Service.
+* `70-gateway.yaml`: Unified Nginx Gateway Deployment & Service (Web UI, HLS, Stream, API, and WebSocket).
 
 ---
 

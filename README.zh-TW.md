@@ -133,11 +133,12 @@ kubectl apply -f k8s/
 部署清單包含：
 * `00-namespace.yaml`: 隔離至獨立 `castflow` Namespace。
 * `10-configmap.yaml`: 動態掛載 Liquidsoap 排程腳本。
-* `20-pvc.yaml`: 音訊檔案與 HLS 切片之 PersistentVolumeClaims。
+* `15-secret.yaml`: 安全管理 JWT 金鑰與 Icecast 串流密碼 (Secret)。
+* `20-pvc.yaml`: 音訊檔案、HLS 切片、資料庫與備份檔之 PersistentVolumeClaims。
 * `30-icecast.yaml` & `40-liquidsoap.yaml`: 核心音訊推流與排程引擎 Deployment。
-* `45-web-hls.yaml`: Nginx HLS CORS 服務。
-* `50-service.yaml`: ClusterIP 內部服務轉發路由。
-* `60-server.yaml`, `70-player.yaml`, `80-admin.yaml`: 後端 API 與雙 Web 前端微服務。
+* `50-service.yaml`: 內部服務轉發路由 (Icecast 與 Liquidsoap ClusterIP)。
+* `60-server.yaml`: 後端 Node.js API 伺服器 Deployment 與 Service。
+* `70-gateway.yaml`: 單一整合 Gateway Deployment 與對外 Service (統籌前端 SPA、HLS、串流、API 與 WebSocket 反向代理)。
 
 ---
 
