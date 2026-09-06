@@ -35,7 +35,7 @@ export default function UnifiedPlayerCard({
   const [isLoading, setIsLoading] = useState(false);
   const [volume, setVolume] = useState(0.85);
   const [isMuted, setIsMuted] = useState(false);
-  const [streamType, setStreamType] = useState('mp3'); // 'mp3' (原生穩定直播) | 'hls' (分段切片)
+  const [streamType, setStreamType] = useState('hls'); // 預設使用 'hls' (秒開高音質切片) | 'mp3' (Icecast 保底串流)
   const [errorMsg, setErrorMsg] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState('upcoming'); // 'upcoming' | 'history'
