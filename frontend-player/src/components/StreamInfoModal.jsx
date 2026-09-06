@@ -7,8 +7,11 @@ export default function StreamInfoModal({ isOpen, onClose, bitrate = 256 }) {
   if (!isOpen) return null;
 
   const hostname = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  const icecastUrl = `http://${hostname}:8000/stream`;
-  const hlsUrl = `http://${hostname}:8088/live.m3u8`;
+  const port = typeof window !== 'undefined' && window.location.port ? `:${window.location.port}` : '';
+  const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
+  const origin = `${protocol}//${hostname}${port}`;
+  const icecastUrl = `${origin}/stream`;
+  const hlsUrl = `${origin}/hls/live.m3u8`;
 
   const copyToClipboard = (text, key) => {
     navigator.clipboard.writeText(text);

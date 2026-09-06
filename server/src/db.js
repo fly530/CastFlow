@@ -196,7 +196,7 @@ export function initDatabase() {
     console.log(' [CastFlow Security] 管理員身分已自動建立 (Initial Admin Account):');
     console.log(`   帳號 (Username): admin`);
     console.log(`   密碼 (Password): ${initialPassword}`);
-    console.log(`   管理後台: http://localhost:3002`);
+    console.log(`   管理後台: http://localhost/admin/ (或 http://localhost:3000/admin/)`);
     console.log(' 請妥善保存此密碼，登入後可於管理設定中隨時進行修改！');
     console.log('='.repeat(64) + '\n');
   }

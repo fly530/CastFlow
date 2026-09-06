@@ -1,0 +1,7 @@
+.git
+music
+output
+k8s
+**/node_modules
+**/dist
+.DS_Store

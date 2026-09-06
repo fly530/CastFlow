@@ -369,7 +369,7 @@ export default function App() {
           </div>
           <div className="flex items-center gap-4">
             <a
-              href="http://localhost:3000"
+              href="/"
               target="_blank"
               rel="noreferrer"
               className="hover:text-purple-400 transition-colors"

@@ -40,7 +40,7 @@ export default function LoginPage({ onLoginSuccess }) {
       {/* 頂部簡易導覽 */}
       <div className="w-full max-w-5xl flex items-center justify-between z-10 py-2">
         <div className="flex items-center gap-2.5">
-          <img src="/admin.svg" alt="CastFlow Admin" className="w-8 h-8 object-contain shrink-0" />
+          <img src={`${import.meta.env.BASE_URL}admin.svg`} alt="CastFlow Admin" className="w-8 h-8 object-contain shrink-0" />
           <div>
             <span className="text-sm font-bold tracking-tight text-white">CastFlow</span>
             <span className="text-[10px] ml-1.5 px-1.5 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono font-semibold border border-purple-500/30">
@@ -50,7 +50,7 @@ export default function LoginPage({ onLoginSuccess }) {
         </div>
 
         <a
-          href="http://localhost:3000"
+          href="/"
           className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-purple-300 transition-colors px-3 py-1.5 rounded-xl hover:bg-slate-900 border border-transparent hover:border-slate-800"
         >
           <Radio className="w-3.5 h-3.5" />

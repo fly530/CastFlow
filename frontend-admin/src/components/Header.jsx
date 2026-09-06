@@ -51,7 +51,7 @@ export default function Header({
         {/* 左側：Logo 與電台標題 */}
         <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-start">
           <div className="flex items-center gap-2.5">
-            <img src="/admin.svg" alt="CastFlow Admin" className="w-8 h-8 object-contain shrink-0" />
+            <img src={`${import.meta.env.BASE_URL}admin.svg`} alt="CastFlow Admin" className="w-8 h-8 object-contain shrink-0" />
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-base sm:text-lg font-bold text-white tracking-tight leading-none">
@@ -129,7 +129,7 @@ export default function Header({
 
           {/* 開啟聽眾播放器 */}
           <a
-            href="http://localhost:3000"
+            href="/"
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-semibold shadow-lg shadow-purple-500/20 transition-all active:scale-95"

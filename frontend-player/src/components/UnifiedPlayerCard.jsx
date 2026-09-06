@@ -598,7 +598,7 @@ export default function UnifiedPlayerCard({
 
             {/* 前往管理後台 */}
             <a
-              href="http://localhost:3002"
+              href="/admin/"
               target="_blank"
               rel="noreferrer"
               className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 rounded-full transition-colors"
