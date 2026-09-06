@@ -109,13 +109,12 @@ On first startup, a secure administrator password is automatically created:
 docker logs castflow-server | grep -E "Password|admin"
 ```
 
-### 3. Service Access Endpoints
-* **Web Player (Listener UI)**: [http://localhost:3000](http://localhost:3000)
-* **Admin Dashboard (Console)**: [http://localhost:3002](http://localhost:3002)
-* **Backend API & WebSocket Server**: [http://localhost:3001](http://localhost:3001) / `ws://localhost:3001/ws`
-* **Icecast MP3 Stream**: `http://localhost:8000/stream` (ESP32 / VLC)
-* **HLS Web Stream**: `http://localhost:8088/live.m3u8`
-* **Icecast Admin Dashboard**: [http://localhost:8000](http://localhost:8000) (User: `admin` / Pass: `hackme`)
+### 3. Service Access Endpoints (Unified via Port 80 Gateway)
+* **Web Player (Listener UI)**: [http://localhost](http://localhost) (Standard Port 80)
+* **Admin Dashboard (Console)**: [http://localhost/admin/](http://localhost/admin/)
+* **Backend API & WebSocket Server**: `http://localhost/api` / `ws://localhost/ws` (Internal reverse proxy)
+* **Icecast MP3 Stream**: `http://localhost/stream` (ESP32 / VLC / Hardware player)
+* **HLS Web Stream**: `http://localhost/hls/live.m3u8`
 
 ---
 

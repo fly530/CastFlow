@@ -109,13 +109,12 @@ docker compose up -d
 docker logs castflow-server | grep -E "Password|admin"
 ```
 
-### 3. 服務訪問端點
-* **聽眾播放器 (Web Player)**：[http://localhost:3000](http://localhost:3000)
-* **管理控制台 (Admin Console)**：[http://localhost:3002](http://localhost:3002)
-* **後端 API / WebSocket 伺服器**：[http://localhost:3001](http://localhost:3001) / `ws://localhost:3001/ws`
-* **Icecast MP3 串流**：`http://localhost:8000/stream` (ESP32 / VLC 播放)
-* **HLS Web 串流**：`http://localhost:8088/live.m3u8`
-* **Icecast 儀表板**：[http://localhost:8000](http://localhost:8000) (帳號: `admin` / 密碼: `hackme`)
+### 3. 服務訪問端點 (統一由 Gateway Port 80 守門)
+* **聽眾播放器 (Web Player)**：[http://localhost](http://localhost) (標準 Port 80)
+* **管理控制台 (Admin Console)**：[http://localhost/admin/](http://localhost/admin/)
+* **後端 API / WebSocket 伺服器**：`http://localhost/api` / `ws://localhost/ws` (內部容器轉發，外界免開 3001)
+* **Icecast MP3 直播串流**：`http://localhost/stream` (ESP32 / VLC / 傳統硬體播放)
+* **Web HLS 切片串流**：`http://localhost/hls/live.m3u8`
 
 ---
 

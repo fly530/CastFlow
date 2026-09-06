@@ -1,4 +1,0 @@
-FROM alpine:3.18
-RUN apk add --no-cache icecast
-EXPOSE 8000
-CMD ["icecast", "-c", "/etc/icecast.xml"]
