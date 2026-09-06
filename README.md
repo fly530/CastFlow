@@ -96,20 +96,44 @@ Playlists A through G are preconfigured with intuitive roles:
 
 ## Quick Start (Docker Compose)
 
-### 1. Clone the repository & Start Services
+### 1. Clone the repository
 ```bash
 git clone https://github.com/fly530/CastFlow.git
 cd CastFlow
+```
+
+### 2. Create `.env` (REQUIRED — compose refuses to start without it)
+
+Generate the keys on the spot; there is nothing to invent by hand:
+
+```bash
+cat > .env <<EOF
+JWT_SECRET=$(openssl rand -hex 32)
+ICECAST_SOURCE_PASSWORD=$(openssl rand -hex 16)
+ICECAST_ADMIN_PASSWORD=$(openssl rand -hex 16)
+EOF
+```
+
+> Do not just `cp .env.example .env` and run — it holds placeholder strings that
+> the server recognises and refuses to start on. The example file documents which
+> variables exist; it is not meant to be used as-is.
+>
+> `JWT_SECRET` signs admin credentials, so a predictable value is the same as no
+> authentication at all. `ICECAST_SOURCE_PASSWORD` doubles as the password
+> Liquidsoap uses to push the stream — both sides share the one key.
+
+### 3. Start all services
+```bash
 docker compose up -d
 ```
 
-### 2. Retrieve Initial Admin Password
+### 4. Retrieve Initial Admin Password
 On first startup, a secure administrator password is automatically created:
 ```bash
 docker logs castflow-server | grep -E "Password|admin"
 ```
 
-### 3. Service Access Endpoints (Unified via Port 80 Gateway)
+### 5. Service Access Endpoints (Unified via Port 80 Gateway)
 * **Web Player (Listener UI)**: [http://localhost](http://localhost) (Standard Port 80)
 * **Admin Dashboard (Console)**: [http://localhost/admin/](http://localhost/admin/)
 * **Backend API & WebSocket Server**: `http://localhost/api` / `ws://localhost/ws` (Internal reverse proxy)

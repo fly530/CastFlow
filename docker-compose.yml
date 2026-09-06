@@ -1,3 +1,18 @@
+# ==============================================================================
+# ★ 啟動前必須先建立 .env，否則本檔會直接拒絕啟動（見下方的 :? 語法）。
+#
+#   cat > .env <<EOF
+#   JWT_SECRET=$(openssl rand -hex 32)
+#   ICECAST_SOURCE_PASSWORD=$(openssl rand -hex 16)
+#   ICECAST_ADMIN_PASSWORD=$(openssl rand -hex 16)
+#   EOF
+#
+# 為什麼用 ${VAR:?訊息} 而不是讓它預設成空字串：
+# 空字串的話 compose 只會印一行 warning 然後照常啟動 —— 使用者得到的是
+# 一個「看起來啟動成功、實際上壞掉」的堆疊：server 無限重啟、liquidsoap
+# 被 Icecast 回 401、/stream 與 /hls 全部 404。訊息淹沒在啟動輸出裡。
+# 用 :? 的話 compose 在建立任何容器之前就停下來，並印出該做什麼。
+# ==============================================================================
 services:
   icecast:
     image: libretime/icecast:2.4.4-alpine
@@ -8,8 +23,8 @@ services:
     environment:
       # libretime/icecast 只認 ICECAST_SOURCE_PASSWORD / ICECAST_RELAY_PASSWORD /
       # ICECAST_ADMIN_PASSWORD 等變數；ICECAST_PASSWORD 會被無聲丟棄。
-      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD}
-      - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD}
+      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:?未設定。請先建立 .env，見本檔開頭}
+      - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:?未設定。請先建立 .env，見本檔開頭}
 
   liquidsoap:
     image: savonet/liquidsoap:v2.2.5
@@ -22,7 +37,7 @@ services:
     environment:
       - ICECAST_HOST=icecast
       - ICECAST_PORT=8000
-      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD}
+      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:?未設定。請先建立 .env，見本檔開頭}
       - ICECAST_MOUNT=stream
       - MUSIC_DIR=/music
       - HLS_DIR=/output/hls
@@ -45,7 +60,7 @@ services:
       - "3001"
     environment:
       - PORT=3001
-      - JWT_SECRET=${JWT_SECRET}
+      - JWT_SECRET=${JWT_SECRET:?未設定。請先建立 .env，見本檔開頭}
       - LIQUIDSOAP_HOST=liquidsoap
       - LIQUIDSOAP_PORT=1234
       - ICECAST_HOST=icecast

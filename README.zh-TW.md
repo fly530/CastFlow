@@ -96,20 +96,42 @@ flowchart TD
 
 ## 本地快速啟動 (Docker Compose)
 
-### 1. 複製專案並啟動所有微服務
+### 1. 複製專案
 ```bash
 git clone https://github.com/fly530/CastFlow.git
 cd CastFlow
+```
+
+### 2. 建立 .env（★ 必要，缺少時 compose 會直接拒絕啟動）
+
+金鑰現場生成，不必手動想密碼：
+
+```bash
+cat > .env <<EOF
+JWT_SECRET=$(openssl rand -hex 32)
+ICECAST_SOURCE_PASSWORD=$(openssl rand -hex 16)
+ICECAST_ADMIN_PASSWORD=$(openssl rand -hex 16)
+EOF
+```
+
+> 不要直接 `cp .env.example .env` 就上 —— 那裡面是佔位字串，伺服器會辨識出
+> 來並拒絕啟動。範本的用途是說明有哪些變數，不是拿來直接用的。
+>
+> `JWT_SECRET` 是管理員憑證的簽章金鑰，用可預測的值等於沒有驗證。
+> `ICECAST_SOURCE_PASSWORD` 同時是 Liquidsoap 推流用的密碼，兩邊共用同一把。
+
+### 3. 啟動所有微服務
+```bash
 docker compose up -d
 ```
 
-### 2. 獲取初次管理員隨機密碼
+### 4. 獲取初次管理員隨機密碼
 在伺服器首次開機時，系統會自動在 SQLite 建立安全管理員密碼：
 ```bash
 docker logs castflow-server | grep -E "Password|admin"
 ```
 
-### 3. 服務訪問端點 (統一由 Gateway Port 80 守門)
+### 5. 服務訪問端點 (統一由 Gateway Port 80 守門)
 * **聽眾播放器 (Web Player)**：[http://localhost](http://localhost) (標準 Port 80)
 * **管理控制台 (Admin Console)**：[http://localhost/admin/](http://localhost/admin/)
 * **後端 API / WebSocket 伺服器**：`http://localhost/api` / `ws://localhost/ws` (內部容器轉發，外界免開 3001)
