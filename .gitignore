@@ -16,19 +16,9 @@ backups/*
 output/hls/*
 !output/hls/.gitkeep
 
-# MP3 / Audio Media in music playlists
-music/**/*.mp3
-music/**/*.wav
-music/**/*.flac
-music/**/*.aac
-music/**/*.m4a
-music/**/*.ogg
-music/**/*.zip
-music/**/*.json
-!music/**/.gitkeep
-music/aaaaa/
-music/ff/
-music/rock/
+# Music directory (All user audio media & playlist subdirectories)
+music/*
+!music/.gitkeep
 
 # Environment variables & secrets
 .env

@@ -86,6 +86,19 @@ export function initDatabase() {
     );
   `);
 
+  // 自動確保預設歌單資料夾 (A ~ G) 存在於 MUSIC_DIR
+  const musicBaseDir = process.env.MUSIC_DIR || path.resolve(process.cwd(), '../music');
+  ['A', 'B', 'C', 'D', 'E', 'F', 'G'].forEach((f) => {
+    const p = path.join(musicBaseDir, f);
+    if (!fs.existsSync(p)) {
+      try {
+        fs.mkdirSync(p, { recursive: true });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   // 初始化預設 A ~ G 歌單與基本排程
   const playlistCount = database.prepare('SELECT count(*) as count FROM playlists').get().count;
   if (playlistCount === 0) {
