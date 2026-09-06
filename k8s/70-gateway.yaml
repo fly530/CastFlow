@@ -16,6 +16,7 @@ spec:
         app: gateway
     spec:
       containers:
+      # 1. 統一入口 Nginx (前端 Web SPA、HLS、串流、API 反向代理)
       - name: gateway
         image: castflow-gateway:latest
         imagePullPolicy: IfNotPresent
@@ -23,7 +24,8 @@ spec:
         - containerPort: 80
           name: http
         volumeMounts:
-        - name: hls-volume
+        # 直接由記憶體共享 tmpfs 讀取 HLS 切片，零磁碟 I/O、極致效能
+        - name: hls-ram
           mountPath: /usr/share/nginx/hls
           readOnly: true
         resources:
@@ -45,10 +47,57 @@ spec:
             port: 80
           initialDelaySeconds: 5
           periodSeconds: 15
+
+      # 2. 廣播核心排程推流引擎 Liquidsoap (與 Gateway 同 Pod 共享記憶體 tmpfs)
+      - name: liquidsoap
+        image: savonet/liquidsoap:v2.2.5
+        args: ["/etc/liquidsoap/radio.liq"]
+        ports:
+        - containerPort: 1234
+          name: telnet
+        env:
+        - name: ICECAST_HOST
+          value: "icecast"
+        - name: ICECAST_PORT
+          value: "8000"
+        - name: ICECAST_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: castflow-secrets
+              key: icecast-password
+        - name: ICECAST_MOUNT
+          value: "stream"
+        - name: MUSIC_DIR
+          value: "/music"
+        - name: HLS_DIR
+          value: "/output/hls"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/liquidsoap
+        - name: music-volume
+          mountPath: "/music"
+        - name: hls-ram
+          mountPath: /output/hls
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+
       volumes:
-      - name: hls-volume
+      # 記憶體磁碟 (tmpfs 64MB)，免去 NVMe 每日頻繁寫入切片之損耗，並天然解決跨節點調度切片遺失問題
+      - name: hls-ram
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Mi
+      - name: config-volume
+        configMap:
+          name: liquidsoap-config
+      - name: music-volume
         persistentVolumeClaim:
-          claimName: radio-hls-pvc
+          claimName: radio-music-pvc
 ---
 apiVersion: v1
 kind: Service
@@ -59,7 +108,7 @@ metadata:
     app: gateway
 spec:
   # 適用於 K3s (內建 ServiceLB) 及雲端 Kubernetes 平台 (GKE/EKS/AKS)
-  # 若在純自建裸機環境，可改為 NodePort 或搭配 Ingress Controller
+  # 若在純自建裸機環境，亦可改為 NodePort
   type: LoadBalancer
   selector:
     app: gateway

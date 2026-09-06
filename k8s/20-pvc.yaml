@@ -4,23 +4,12 @@ metadata:
   name: radio-music-pvc
   namespace: castflow
 spec:
+  # 採用 ReadWriteOnce 完美適配 local-path 及單節點存儲，同節點多 Pod (server 與 gateway/liquidsoap) 可共同掛載
   accessModes:
-    - ReadWriteMany
+    - ReadWriteOnce
   resources:
     requests:
       storage: 20Gi
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: radio-hls-pvc
-  namespace: castflow
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 2Gi
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

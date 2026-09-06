@@ -134,11 +134,11 @@ Included manifests:
 * `00-namespace.yaml`: Creates the dedicated `castflow` namespace.
 * `10-configmap.yaml`: Mounts dynamic Liquidsoap scripts.
 * `15-secret.yaml`: Secure credentials for JWT and Icecast.
-* `20-pvc.yaml`: PersistentVolumeClaims for audio files, HLS, database, and backups.
-* `30-icecast.yaml` & `40-liquidsoap.yaml`: Audio streaming and scheduling core deployments.
+* `20-pvc.yaml`: PersistentVolumeClaims for audio files, database, and backups (ReadWriteOnce for local-path).
+* `30-icecast.yaml`: Icecast audio streaming server deployment.
 * `50-service.yaml`: Core internal ClusterIP service routing (icecast & liquidsoap).
 * `60-server.yaml`: Backend Node.js API server Deployment & Service.
-* `70-gateway.yaml`: Unified Nginx Gateway Deployment & Service (Web UI, HLS, Stream, API, and WebSocket).
+* `70-gateway.yaml`: Unified Gateway + Liquidsoap core (Multi-container Pod sharing in-memory tmpfs emptyDir + LoadBalancer Service).
 
 ---
 

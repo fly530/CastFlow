@@ -4,10 +4,10 @@ metadata:
   name: liquidsoap
   namespace: castflow
   labels:
-    app: liquidsoap
+    app: gateway
 spec:
   selector:
-    app: liquidsoap
+    app: gateway
   ports:
   - port: 1234
     targetPort: 1234
