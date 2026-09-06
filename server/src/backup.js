@@ -8,7 +8,7 @@ import { getMusicBaseDir } from './playlists.js';
  * 取得備份檔案儲存目錄 (/music/backups)
  */
 export function getBackupDir() {
-  const dir = path.join(getMusicBaseDir(), 'backups');
+  const dir = process.env.BACKUP_DIR || path.resolve(process.cwd(), '../backups');
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }

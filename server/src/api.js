@@ -126,7 +126,7 @@ router.get('/history', (req, res) => {
 // ==============================================================================
 // 播放診斷與日誌記錄 (Playback Health & Diagnostic Logging)
 // ==============================================================================
-const LOGS_DIR = path.join(getMusicBaseDir(), 'logs');
+const LOGS_DIR = process.env.DATA_DIR ? path.join(process.env.DATA_DIR, 'logs') : path.join(getMusicBaseDir(), 'logs');
 if (!fs.existsSync(LOGS_DIR)) {
   try {
     fs.mkdirSync(LOGS_DIR, { recursive: true });
@@ -680,7 +680,7 @@ router.get('/backups', requireAuth, (req, res) => {
     res.json({
       success: true,
       data: list,
-      backupDir: 'music/backups'
+      backupDir: process.env.BACKUP_DIR ? 'backups' : 'music/backups'
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -695,7 +695,7 @@ router.post('/backups', requireAuth, (req, res) => {
     const backup = createBackup();
     res.json({
       success: true,
-      message: `備份建立成功！已儲存至 music/backups/${backup.filename}`,
+      message: `備份建立成功！已儲存至 backups/${backup.filename}`,
       data: backup
     });
   } catch (err) {
@@ -711,7 +711,7 @@ router.post('/backups/full-zip', requireAuth, (req, res) => {
     const backup = createFullZipBackup();
     res.json({
       success: true,
-      message: `全站歌曲與設定備份已成功打包！已儲存至 music/backups/${backup.filename}`,
+      message: `全站歌曲與設定備份已成功打包！已儲存至 backups/${backup.filename}`,
       data: backup
     });
   } catch (err) {

@@ -50,8 +50,12 @@ services:
       - ICECAST_PORT=8000
       - ICECAST_MOUNT=stream
       - MUSIC_DIR=/music
+      - DATA_DIR=/data
+      - BACKUP_DIR=/backups
     volumes:
       - ./music:/music
+      - ./data:/data
+      - ./backups:/backups
 
   gateway:
     build:

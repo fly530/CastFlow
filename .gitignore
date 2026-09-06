@@ -9,11 +9,10 @@ build/
 out/
 
 # Runtime data & Local Storage
-music/radio.db*
-music/backups/*
-!music/backups/.gitkeep
-music/logs/*
-!music/logs/.gitkeep
+data/*
+!data/.gitkeep
+backups/*
+!backups/.gitkeep
 output/hls/*
 !output/hls/.gitkeep
 

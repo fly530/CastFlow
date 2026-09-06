@@ -8,7 +8,7 @@ let db = null;
 
 export function getDatabase() {
   if (!db) {
-    const dbDir = process.env.MUSIC_DIR || path.resolve(process.cwd(), '../music');
+    const dbDir = process.env.DATA_DIR || process.env.MUSIC_DIR || path.resolve(process.cwd(), '../data');
     if (!fs.existsSync(dbDir)) {
       fs.mkdirSync(dbDir, { recursive: true });
     }

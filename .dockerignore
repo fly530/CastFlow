@@ -1,5 +1,7 @@
 .git
 music
+data
+backups
 output
 k8s
 **/node_modules
