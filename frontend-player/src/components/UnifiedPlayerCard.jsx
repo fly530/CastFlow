@@ -103,6 +103,64 @@ export default function UnifiedPlayerCard({
     }
   }, [streamType]);
 
+  // 音畫智慧同步：當伺服器換曲時，若聽眾正在播放且耳機內仍有 4~5 秒音訊緩衝，
+  // 延遲更新畫面資訊以完美貼合耳機聽到的新曲第一聲，並消除進度條倒退回彈動畫。
+  const [syncedTrack, setSyncedTrack] = useState(currentTrack);
+  const [isResettingProgress, setIsResettingProgress] = useState(false);
+  const pendingTrackRef = useRef(null);
+  const switchTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (!currentTrack) return;
+
+    // 尚未初始化或未在播放時，直接同步最新曲目
+    if (!syncedTrack || !isPlaying) {
+      setSyncedTrack(currentTrack);
+      pendingTrackRef.current = null;
+      if (switchTimerRef.current) clearTimeout(switchTimerRef.current);
+      return;
+    }
+
+    // 檢測到伺服器端換曲 (title 變更)
+    if (currentTrack.title !== syncedTrack.title) {
+      if (pendingTrackRef.current?.title === currentTrack.title) return;
+      pendingTrackRef.current = currentTrack;
+
+      if (switchTimerRef.current) clearTimeout(switchTimerRef.current);
+
+      // 動態取得當前音訊前方緩衝量 (例如 4~5 秒)，保底 4.5 秒，上限 6 秒
+      const bufferAhead = getBufferAhead(audioRef.current);
+      const delayMs = Math.max(3500, Math.min(6000, bufferAhead > 0 ? bufferAhead * 1000 : 4500));
+
+      logEvent('INFO', 'METADATA_SYNC_DELAY', `偵測到曲目切換，保留 ${Math.round(delayMs)}ms 緩衝播放時間，避免畫面提前換歌`);
+
+      // 讓當前曲目進度平穩飽和在 100%
+      setSyncedTrack((prev) => ({
+        ...prev,
+        progress: 100,
+        remaining: 0
+      }));
+
+      // 等耳機即將播放新曲時，無感平滑切換為新歌
+      switchTimerRef.current = setTimeout(() => {
+        setIsResettingProgress(true);
+        setSyncedTrack(pendingTrackRef.current || currentTrack);
+        pendingTrackRef.current = null;
+        // 瞬間將進度歸零 (無回彈動畫)，下一個 tick 恢復平滑 transition
+        setTimeout(() => setIsResettingProgress(false), 50);
+      }, delayMs);
+    } else if (!pendingTrackRef.current) {
+      // 同一首歌曲且無等待切換，正常跟隨進度更新
+      setSyncedTrack(currentTrack);
+    }
+  }, [currentTrack, isPlaying]);
+
+  useEffect(() => {
+    return () => {
+      if (switchTimerRef.current) clearTimeout(switchTimerRef.current);
+    };
+  }, []);
+
   // 抓取剛才播過歷史紀錄
   const fetchHistory = async () => {
     try {
@@ -120,7 +178,7 @@ export default function UnifiedPlayerCard({
 
   useEffect(() => {
     fetchHistory();
-  }, [currentTrack?.title]);
+  }, [syncedTrack?.title]);
 
   // 全螢幕監聽與切換
   useEffect(() => {
@@ -469,7 +527,7 @@ export default function UnifiedPlayerCard({
     }
   };
 
-  const coverUrl = `/api/current/cover?title=${encodeURIComponent(currentTrack?.title || '')}&v=${encodeURIComponent(currentTrack?.title || '')}`;
+  const coverUrl = `/api/current/cover?title=${encodeURIComponent(syncedTrack?.title || '')}&v=${encodeURIComponent(syncedTrack?.title || '')}`;
 
   return (
     <div className="w-full max-w-6xl mx-auto" ref={cardRef}>
@@ -578,7 +636,7 @@ export default function UnifiedPlayerCard({
                 <div className="relative w-36 h-36 sm:w-44 sm:h-44 xl:w-48 xl:h-48 rounded-full overflow-hidden ring-4 ring-indigo-500/40 shadow-inner flex items-center justify-center bg-slate-800">
                   <img
                     src={coverUrl}
-                    alt={currentTrack?.title || 'Album Cover'}
+                    alt={syncedTrack?.title || 'Album Cover'}
                     className="w-full h-full object-cover select-none pointer-events-none"
                     onError={(e) => {
                       e.target.src = '/radio.svg';
@@ -630,21 +688,21 @@ export default function UnifiedPlayerCard({
                 <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-400 bg-indigo-950/60 border border-indigo-800/50 px-2.5 py-0.5 rounded-md flex items-center gap-1.5">
                   <Sparkles className="w-3 h-3" /> NOW PLAYING
                 </span>
-                {currentTrack?.album && (
+                {syncedTrack?.album && (
                   <span className="text-xs text-slate-400 font-medium truncate max-w-[280px]">
-                    {currentTrack.album}
+                    {syncedTrack.album}
                   </span>
                 )}
               </div>
 
               {/* 大標題 */}
               <h2 className="text-2xl sm:text-3xl xl:text-4xl font-black text-white tracking-tight leading-tight line-clamp-2 drop-shadow">
-                {currentTrack?.title || 'CastFlow Live'}
+                {syncedTrack?.title || 'CastFlow Live'}
               </h2>
 
               {/* 演出者 */}
               <p className="text-base sm:text-xl font-medium text-slate-300 line-clamp-1">
-                {currentTrack?.artist || '雲原生智慧自動化廣播'}
+                {syncedTrack?.artist || '雲原生智慧自動化廣播'}
               </p>
             </div>
 
@@ -652,15 +710,19 @@ export default function UnifiedPlayerCard({
             <div className="space-y-2">
               <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden relative border border-slate-800/80">
                 <div
-                  className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 h-full rounded-full transition-all duration-1000 ease-linear shadow-[0_0_12px_rgba(129,140,248,0.5)]"
-                  style={{ width: `${currentTrack?.progress || 0}%` }}
+                  className={`bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 h-full rounded-full shadow-[0_0_12px_rgba(129,140,248,0.5)] ${
+                    isResettingProgress || (syncedTrack?.progress === 0)
+                      ? 'transition-none'
+                      : 'transition-all duration-1000 ease-linear'
+                  }`}
+                  style={{ width: `${syncedTrack?.progress || 0}%` }}
                 />
               </div>
               <div className="flex justify-between text-xs text-slate-400 font-mono font-medium">
-                <span>{formatTime(currentTrack?.elapsed)}</span>
+                <span>{formatTime(syncedTrack?.elapsed)}</span>
                 <span>
-                  {currentTrack?.remaining !== null
-                    ? `-${formatTime(currentTrack?.remaining)}`
+                  {syncedTrack?.remaining !== null
+                    ? `-${formatTime(syncedTrack?.remaining)}`
                     : '--:--'}
                 </span>
               </div>

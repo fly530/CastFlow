@@ -32,6 +32,54 @@ export default function NowPlayingControl({
 
   const audioRef = useRef(null);
 
+  // 智慧音畫同步：當伺服器換曲時，配合串流音訊緩衝時間差 (約 4.5 秒) 平滑換曲，並消除進度條倒退回彈
+  const [syncedTrack, setSyncedTrack] = useState(currentTrack);
+  const [isResettingProgress, setIsResettingProgress] = useState(false);
+  const pendingTrackRef = useRef(null);
+  const switchTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (!currentTrack) return;
+
+    if (!syncedTrack) {
+      setSyncedTrack(currentTrack);
+      return;
+    }
+
+    if (currentTrack.title !== syncedTrack.title) {
+      if (pendingTrackRef.current?.title === currentTrack.title) return;
+      pendingTrackRef.current = currentTrack;
+
+      if (switchTimerRef.current) clearTimeout(switchTimerRef.current);
+
+      // 固定等待 4.5 秒（與串流切片時差精確對齊）
+      const delayMs = 4500;
+
+      // 讓當前曲目進度平穩飽和在 100%
+      setSyncedTrack((prev) => ({
+        ...prev,
+        progress: 100,
+        remaining: 0
+      }));
+
+      // 4.5 秒後耳機剛好聽到新歌第一聲，無縫切換
+      switchTimerRef.current = setTimeout(() => {
+        setIsResettingProgress(true);
+        setSyncedTrack(pendingTrackRef.current || currentTrack);
+        pendingTrackRef.current = null;
+        setTimeout(() => setIsResettingProgress(false), 50);
+      }, delayMs);
+    } else if (!pendingTrackRef.current) {
+      setSyncedTrack(currentTrack);
+    }
+  }, [currentTrack]);
+
+  useEffect(() => {
+    return () => {
+      if (switchTimerRef.current) clearTimeout(switchTimerRef.current);
+    };
+  }, []);
+
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.volume = isMuted ? 0 : volume;
@@ -69,6 +117,10 @@ export default function NowPlayingControl({
     try {
       setIsSkipping(true);
       setSkipSuccess(false);
+      if (switchTimerRef.current) clearTimeout(switchTimerRef.current);
+      pendingTrackRef.current = null;
+      setIsResettingProgress(true);
+      setTimeout(() => setIsResettingProgress(false), 50);
       const startTime = Date.now();
       await onSkip();
       // 保證至少 800ms 的轉場視覺反饋，避免閃爍過快讓人感覺無反應
@@ -92,7 +144,7 @@ export default function NowPlayingControl({
     }
   };
 
-  const coverUrl = `/api/current/cover?t=${Math.floor(Date.now() / 10000)}`;
+  const coverUrl = `/api/current/cover?title=${encodeURIComponent(syncedTrack?.title || '')}&v=${encodeURIComponent(syncedTrack?.title || '')}`;
 
   // 預設未來 3 首曲目（若後端尚未計算出，則顯示友善排程指示）
   const displayUpcoming = upcomingTracks && upcomingTracks.length > 0
@@ -238,14 +290,14 @@ export default function NowPlayingControl({
 
               <div className="min-w-0 flex-1">
                 <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight truncate">
-                  {currentTrack?.title || 'CastFlow Live 廣播播送中'}
+                  {syncedTrack?.title || 'CastFlow Live 廣播播送中'}
                 </h2>
                 <p className="text-sm font-semibold text-purple-300 truncate mt-0.5">
-                  {currentTrack?.artist || '雲原生自動化廣播電台'}
+                  {syncedTrack?.artist || '雲原生自動化廣播電台'}
                 </p>
-                {currentTrack?.album ? (
+                {syncedTrack?.album ? (
                   <p className="text-xs text-slate-400 truncate mt-1">
-                    專輯: {currentTrack.album}
+                    專輯: {syncedTrack.album}
                   </p>
                 ) : (
                   <p className="text-xs text-slate-500 mt-1 italic">
@@ -257,16 +309,20 @@ export default function NowPlayingControl({
                 <div className="mt-4">
                   <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden shadow-inner">
                     <div
-                      className="bg-gradient-to-r from-purple-500 via-indigo-500 to-emerald-400 h-full rounded-full transition-all duration-1000 ease-linear shadow-md"
-                      style={{ width: `${currentTrack?.progress || 0}%` }}
+                      className={`bg-gradient-to-r from-purple-500 via-indigo-500 to-emerald-400 h-full rounded-full shadow-md ${
+                        isResettingProgress || (syncedTrack?.progress === 0)
+                          ? 'transition-none'
+                          : 'transition-all duration-1000 ease-linear'
+                      }`}
+                      style={{ width: `${syncedTrack?.progress || 0}%` }}
                     />
                   </div>
                   <div className="flex justify-between text-[11px] text-slate-400 font-mono mt-1.5">
-                    <span>{formatTime(currentTrack?.elapsed)}</span>
-                    <span className="text-purple-300/80 font-bold">{currentTrack?.progress || 0}%</span>
+                    <span>{formatTime(syncedTrack?.elapsed)}</span>
+                    <span className="text-purple-300/80 font-bold">{syncedTrack?.progress || 0}%</span>
                     <span>
-                      {currentTrack?.remaining !== null
-                        ? `-${formatTime(currentTrack?.remaining)}`
+                      {syncedTrack?.remaining !== null
+                        ? `-${formatTime(syncedTrack?.remaining)}`
                         : '--:--'}
                     </span>
                   </div>
