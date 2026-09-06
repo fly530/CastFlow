@@ -40,18 +40,18 @@ flowchart TD
     MusicVol --> LS
     LS -->|MP3 推流| Icecast
     LS -->|極速記憶體寫入| HLSTmpfs
-    HLSTmpfs -->|零代理直接讀取 /hls/| Gateway
+    HLSTmpfs -->|"零代理直接讀取 /hls/"| Gateway
 
-    Server <-->|Telnet 控制 (Port: 1234)| LS
+    Server <-->|"Telnet 控制 (Port: 1234)"| LS
     Server <-->|JSON 統計| Icecast
     Server -->|曲庫管理與上傳| MusicVol
-    Server <-->|排程/歷史/鑑權持久化| SQLite
+    Server <-->|"排程 / 歷史 / 鑑權持久化"| SQLite
     DataVol --> SQLite
 
-    Gateway <-->|反向代理 /api/ & /ws| Server
-    Gateway -->|反向代理 /stream| Icecast
-    Gateway -->|提供前端靜態 SPA /| Listener
-    Gateway -->|提供管理後台 SPA /admin/| Admin
+    Gateway <-->|"反向代理 /api/ & /ws"| Server
+    Gateway -->|"反向代理 /stream"| Icecast
+    Gateway -->|"提供前端靜態 SPA /"| Listener
+    Gateway -->|"提供管理後台 SPA /admin/"| Admin
     Icecast -->|原生串流| Hardware
 ```
 

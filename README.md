@@ -40,18 +40,18 @@ flowchart TD
     MusicVol --> LS
     LS -->|MP3 Broadcast| Icecast
     LS -->|In-Memory Writes| HLSTmpfs
-    HLSTmpfs -->|Zero-proxy direct read /hls/| Gateway
+    HLSTmpfs -->|"Zero-proxy direct read /hls/"| Gateway
 
-    Server <-->|Telnet Control (Port: 1234)| LS
+    Server <-->|"Telnet Control (Port: 1234)"| LS
     Server <-->|JSON Stats| Icecast
     Server -->|Playlist Upload & Manage| MusicVol
-    Server <-->|Schedules/History/Auth| SQLite
+    Server <-->|"Schedules / History / Auth"| SQLite
     DataVol --> SQLite
 
-    Gateway <-->|Reverse Proxy /api/ & /ws| Server
-    Gateway -->|Reverse Proxy /stream| Icecast
-    Gateway -->|Serve Frontend SPA /| Listener
-    Gateway -->|Serve Admin SPA /admin/| Admin
+    Gateway <-->|"Reverse Proxy /api/ & /ws"| Server
+    Gateway -->|"Reverse Proxy /stream"| Icecast
+    Gateway -->|"Serve Frontend SPA /"| Listener
+    Gateway -->|"Serve Admin SPA /admin/"| Admin
     Icecast -->|Direct Stream| Hardware
 ```
 
