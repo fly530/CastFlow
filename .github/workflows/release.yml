@@ -10,6 +10,10 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   validate-k8s:
     name: Validate Kubernetes Manifests
@@ -103,7 +107,7 @@ jobs:
           npm run build
 
   build-containers:
-    name: Build Docker Containers
+    name: Build & Publish Docker Containers
     needs: [security-audit, validate-k8s]
     runs-on: ubuntu-latest
     steps:
@@ -113,17 +117,47 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Backend Server Image
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for server image
+        id: meta-server
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/castflow-server
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha,prefix=sha-
+
+      - name: Build and push Backend Server Image
         uses: docker/build-push-action@v5
         with:
           context: ./server
-          push: false
-          tags: castflow-server:latest
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-server.outputs.tags }}
+          labels: ${{ steps.meta-server.outputs.labels }}
 
-      - name: Build Unified Gateway Image
+      - name: Extract metadata for gateway image
+        id: meta-gateway
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/castflow-gateway
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha,prefix=sha-
+
+      - name: Build and push Unified Gateway Image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: gateway/Dockerfile
-          push: false
-          tags: castflow-gateway:latest
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-gateway.outputs.tags }}
+          labels: ${{ steps.meta-gateway.outputs.labels }}

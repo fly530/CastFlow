@@ -25,7 +25,7 @@ spec:
       containers:
       # 1. 統一入口 Nginx (前端 Web SPA、HLS、串流、API 反向代理)
       - name: gateway
-        image: castflow-gateway:latest
+        image: ghcr.io/fly530/castflow-gateway:latest
         imagePullPolicy: IfNotPresent
         # nginx-unprivileged 以 uid 101 執行，聽 8080（非特權埠）。
         # Service 仍對外提供 80，見本檔最下方。

@@ -51,6 +51,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+    image: ghcr.io/fly530/castflow-server:latest
     container_name: castflow-server
     restart: unless-stopped
     depends_on:
@@ -78,6 +79,7 @@ services:
     build:
       context: .
       dockerfile: gateway/Dockerfile
+    image: ghcr.io/fly530/castflow-gateway:latest
     container_name: castflow-gateway
     restart: unless-stopped
     depends_on:

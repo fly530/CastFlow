@@ -20,7 +20,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: server
-        image: castflow-server:latest
+        image: ghcr.io/fly530/castflow-server:latest
         imagePullPolicy: IfNotPresent
         # ★ 這是處理上傳、解壓、刪除的容器 —— 檔案操作漏洞的影響範圍
         # 完全取決於它以什麼身分執行。映像已 USER node（uid 1000）。
