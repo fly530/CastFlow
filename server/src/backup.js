@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { getAllPlaylists, getAllSchedules, restorePlaylistsAndSchedules } from './db.js';
 import { getMusicBaseDir } from './playlists.js';
 
@@ -97,9 +97,13 @@ export function createFullZipBackup() {
 
   // 2. 將所有的歌單音訊資料夾打包進 ZIP，排除 backups、logs、sqlite db
   try {
-    execSync(
-      `cd "${baseDir}" && /usr/bin/zip -r -q "${zipFilePath}" . -x "backups/*" "logs/*" "*.db*" ".*"`,
-      { stdio: 'ignore' }
+    // cwd 選項取代原本的 `cd "..." &&` —— 那個 shell 串接是這裡需要 shell
+    // 的唯一理由，拿掉之後就能改用不經過 shell 的 execFileSync。
+    // -x 的樣式由 zip 自己解讀，不需要 shell 展開。
+    execFileSync(
+      '/usr/bin/zip',
+      ['-r', '-q', zipFilePath, '.', '-x', 'backups/*', 'logs/*', '*.db*', '.*'],
+      { cwd: baseDir, stdio: 'ignore' }
     );
   } catch (err) {
     throw new Error(`打包 ZIP 失敗: ${err.message}`);
@@ -232,7 +236,7 @@ export function restoreBackupFile(filename) {
   // 若為 .zip 完整備份包，先自動解開檔案覆蓋回 /music
   if (filename.toLowerCase().endsWith('.zip')) {
     try {
-      execSync(`/usr/bin/unzip -o -q "${filePath}" -d "${baseDir}"`, { stdio: 'ignore' });
+      execFileSync('/usr/bin/unzip', ['-o', '-q', filePath, '-d', baseDir], { stdio: 'ignore' });
     } catch (err) {
       throw new Error(`解壓縮備份包失敗: ${err.message}`);
     }

@@ -22,9 +22,39 @@ export function getMusicBaseDir() {
 /**
  * 取得歌單所在資料夾路徑 (支援 SQLite 動態歌單)
  */
+/**
+ * 資料夾名稱正規化。
+ *
+ * ★ 這是所有檔案操作的收口點，穿越必須擋在這裡而不是各個呼叫端。
+ *
+ * 資料庫裡的 `folder` 欄位是使用者可設的（POST /api/playlists 的 body），
+ * 原本只做 .trim() 就直接送進 path.join()。搭配下方的 mkdirSync
+ * ({ recursive: true })，`folder: "../../../../app/src"` 這種值可以在容器內
+ * 任意位置建目錄並寫入檔案，deleteTrack 也會跟著能刪任意路徑的檔案。
+ *
+ * 在建立端（api.js）也做了同樣的清洗，但那只保護「之後」寫入的資料；
+ * 這裡再擋一次，既有的髒資料列也一併失效。兩層都要有。
+ */
+function isSafeFolderName(name) {
+  return typeof name === 'string' && name.length > 0 && /^[a-zA-Z0-9_-]+$/.test(name);
+}
+
+/**
+ * 決定歌單實際使用的資料夾名。
+ *
+ * 不安全的值不做「就地取代成底線」—— 那會讓「爵士」與「藍調」雙雙變成 `__`
+ * 而共用同一個資料夾，兩個歌單的曲目混在一起。改為退回歌單 id：
+ * 它是主鍵（唯一），而且在 api.js 建立時就已清洗成 [a-z0-9_-]。
+ */
+function resolveFolderName(folder, playlistId) {
+  if (isSafeFolderName(folder)) return folder;
+  if (isSafeFolderName(playlistId)) return playlistId;
+  return String(playlistId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_') || 'default';
+}
+
 export function getPlaylistDir(playlistId) {
   const pl = getPlaylistById(playlistId);
-  const folderName = pl ? pl.folder : playlistId.replace(/[^a-zA-Z0-9_\-]/g, '_');
+  const folderName = resolveFolderName(pl ? pl.folder : playlistId, playlistId);
   const dir = path.join(getMusicBaseDir(), folderName);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -82,11 +112,25 @@ export async function getPlaylistTracks(playlistId) {
 }
 
 /**
+ * 這個曲目是否允許被刪除／移動。
+ *
+ * path.basename() 擋住了「跳出目錄」，但沒有限制「刪什麼」—— 沒有這道檢查時，
+ * 曲庫目錄裡的任何檔案都能被刪除（radio.db、.htaccess、備份⋯⋯）。
+ * 檔案管理 API 的職責只有 mp3，就只放行 mp3。
+ */
+function isDeletableTrack(safeFilename) {
+  return path.extname(safeFilename).toLowerCase() === '.mp3';
+}
+
+/**
  * 刪除指定歌單中的曲目
  */
 export async function deleteTrack(playlistId, filename) {
   const dir = getPlaylistDir(playlistId);
   const safeFilename = path.basename(filename);
+  if (!isDeletableTrack(safeFilename)) {
+    return false;
+  }
   const filePath = path.join(dir, safeFilename);
 
   if (fs.existsSync(filePath)) {
@@ -106,6 +150,10 @@ export async function deleteTracks(playlistId, filenames) {
 
   for (const filename of filenames) {
     const safeFilename = path.basename(filename);
+    if (!isDeletableTrack(safeFilename)) {
+      errors.push({ filename: safeFilename, error: '只能刪除 .mp3 檔案' });
+      continue;
+    }
     const filePath = path.join(dir, safeFilename);
     try {
       if (fs.existsSync(filePath)) {
@@ -131,6 +179,10 @@ export async function moveTracks(sourcePlaylistId, targetPlaylistId, filenames) 
 
   for (const filename of filenames) {
     const safeFilename = path.basename(filename);
+    if (!isDeletableTrack(safeFilename)) {
+      errors.push({ filename: safeFilename, error: '只能移動 .mp3 檔案' });
+      continue;
+    }
     const srcPath = path.join(srcDir, safeFilename);
 
     try {

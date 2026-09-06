@@ -70,7 +70,8 @@ services:
       - liquidsoap
       - icecast
     ports:
-      - "80:80"
+      # 容器內是 8080（nginx-unprivileged，非 root），對外維持 80
+      - "80:8080"
     volumes:
       - hls-ram:/usr/share/nginx/hls:ro
 

@@ -15,10 +15,26 @@ spec:
       labels:
         app: server
     spec:
+      # fsGroup 必須與 70-gateway.yaml 相同，兩者共用 radio-music-pvc。
+      securityContext:
+        fsGroup: 1000
       containers:
       - name: server
         image: castflow-server:latest
         imagePullPolicy: IfNotPresent
+        # ★ 這是處理上傳、解壓、刪除的容器 —— 檔案操作漏洞的影響範圍
+        # 完全取決於它以什麼身分執行。映像已 USER node（uid 1000）。
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          # 唯讀根檔案系統：所有寫入都必須落在掛載的 volume 上
+          # （/music、/data、/backups 三個 PVC，加上 /tmp 的 emptyDir）。
+          # 已實測 `docker run --read-only --tmpfs /tmp` 可正常啟動並完成
+          # SQLite 初始化。這讓「寫入應用程式自己的檔案」這條路徑徹底消失。
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: 3001
           name: http
@@ -53,6 +69,8 @@ spec:
           mountPath: "/data"
         - name: backups-volume
           mountPath: "/backups"
+        - name: tmp
+          mountPath: "/tmp"
         resources:
           requests:
             cpu: 50m
@@ -82,6 +100,9 @@ spec:
       - name: backups-volume
         persistentVolumeClaim:
           claimName: radio-backups-pvc
+      # readOnlyRootFilesystem 之下仍需要一個可寫的暫存區
+      - name: tmp
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

@@ -1,7 +1,11 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { execSync } from 'child_process';
+// ★ execFileSync 而非 execSync：參數以陣列傳遞，不經過 shell。
+// 上傳檔名的清洗規則（playlists.js）不會過濾 $ ` ( ) ; &，而 execSync 的
+// 字串在雙引號內仍會被 shell 展開 —— 一個叫 "$(...).zip" 的上傳檔就是
+// 容器內的任意指令執行。改用陣列參數後這條路徑整個消失。
+import { execFileSync } from 'child_process';
 import { liquidsoap } from './telnet.js';
 import { getRadioStatus } from './scheduler.js';
 import {
@@ -350,7 +354,11 @@ router.post('/playlists/:id/upload', requireAuth, uploadMiddleware.any(), async 
           // -j: 不要建立子目錄（全部平鋪進當前歌單資料夾）
           // -o: 覆蓋已有同名檔案
           // -q: 靜默執行
-          execSync(`/usr/bin/unzip -j -o -q "${zipFilePath}" "*.mp3" "*.MP3" -d "${destDir}"`, { stdio: 'ignore' });
+          execFileSync(
+            '/usr/bin/unzip',
+            ['-j', '-o', '-q', zipFilePath, '*.mp3', '*.MP3', '-d', destDir],
+            { stdio: 'ignore' }
+          );
           extractedCount++;
         } catch (unzipErr) {
           console.warn('[Upload] Unzip error:', unzipErr.message);
@@ -523,7 +531,11 @@ router.post('/playlists', requireAuth, (req, res) => {
     const created = createPlaylist({
       id: cleanId,
       name: name.trim(),
-      folder: (folder || cleanId).trim(),
+      // ★ folder 會被拿去組檔案系統路徑（playlists.js 的 getPlaylistDir），
+      //   必須與 id 套用同一套清洗。原本只有 .trim()，"../../../../app/src"
+      //   這種值可以讓後續的上傳／刪除操作跳出 MUSIC_DIR。
+      //   getPlaylistDir 也擋了一層（既有髒資料列一併失效），兩層都要有。
+      folder: (folder || cleanId).trim().replace(/[^a-zA-Z0-9_\-]/g, '_') || cleanId,
       description: (description || '').trim(),
       color: color || '#8b5cf6',
       play_mode: play_mode || 'shuffle',

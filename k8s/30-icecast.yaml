@@ -19,6 +19,10 @@ spec:
       - name: icecast
         image: libretime/icecast:2.4.4-alpine
         imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         env:
         - name: ICECAST_SOURCE_PASSWORD
           valueFrom:

@@ -15,13 +15,29 @@ spec:
       labels:
         app: gateway
     spec:
+      # ★ fsGroup 必須與 60-server.yaml 相同。
+      # server 與 gateway 兩個 Pod 掛的是同一個 radio-music-pvc；fsGroup 會對
+      # 掛載點做遞迴 chgrp，兩邊給不同值會互相覆蓋。統一用 1000（server 的
+      # uid/gid）。liquidsoap 以 uid 10000/gid 10001 執行，fsGroup 會把 1000
+      # 加為附加群組，所以它照樣讀寫得到曲庫。
+      securityContext:
+        fsGroup: 1000
       containers:
       # 1. 統一入口 Nginx (前端 Web SPA、HLS、串流、API 反向代理)
       - name: gateway
         image: castflow-gateway:latest
         imagePullPolicy: IfNotPresent
+        # nginx-unprivileged 以 uid 101 執行，聽 8080（非特權埠）。
+        # Service 仍對外提供 80，見本檔最下方。
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 101
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false   # nginx 需寫 /tmp 與 /var/cache/nginx
+          capabilities:
+            drop: ["ALL"]
         ports:
-        - containerPort: 80
+        - containerPort: 8080
           name: http
         volumeMounts:
         # 直接由記憶體共享 tmpfs 讀取 HLS 切片，零磁碟 I/O、極致效能
@@ -57,7 +73,7 @@ spec:
         startupProbe:
           httpGet:
             path: /hls/live.m3u8
-            port: 80
+            port: 8080
           periodSeconds: 5
           failureThreshold: 30    # 150 秒；liquidsoap 啟動 + 首個切片通常 10~30 秒
 
@@ -65,13 +81,13 @@ spec:
         readinessProbe:
           httpGet:
             path: /
-            port: 80
+            port: 8080
           initialDelaySeconds: 2
           periodSeconds: 10
         livenessProbe:
           httpGet:
             path: /
-            port: 80
+            port: 8080
           initialDelaySeconds: 5
           periodSeconds: 15
 
@@ -79,6 +95,14 @@ spec:
       - name: liquidsoap
         image: savonet/liquidsoap:v2.2.5
         args: ["/etc/liquidsoap/radio.liq"]
+        # 上游映像本來就以 uid 10000 執行，這裡把它變成叢集強制的保證，
+        # 而不是「碰巧如此」—— 日後換 tag 若上游改回 root 會直接被擋下。
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: 1234
           name: telnet
@@ -143,5 +167,5 @@ spec:
     app: gateway
   ports:
   - port: 80
-    targetPort: 80
+    targetPort: 8080   # 容器內是 8080（非 root nginx），對外仍是 80
     name: http
