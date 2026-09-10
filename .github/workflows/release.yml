@@ -161,3 +161,63 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-gateway.outputs.tags }}
           labels: ${{ steps.meta-gateway.outputs.labels }}
+
+  # ──────────────────────────────────────────────────────────────
+  # CD：把剛推上 GHCR 的 image 寫回 cool-gitops，交給 ArgoCD 同步套用。
+  #
+  # 只在真的 push 到 main 時跑（tag push 是正式版本，交由人工決定
+  # 何時、用哪個 tag 部署，不自動觸發）。PR 本來就不會建 image，
+  # build-containers 對 PR 也是 push: false，這裡自然沒有東西可回寫。
+  #
+  # 為什麼寫 sha-<commit> 而不是繼續用 latest：latest 這個 tag 配
+  # imagePullPolicy: IfNotPresent 時，叢集裡舊節點快取住的 latest
+  # 永遠不會被換掉（同名 tag，kubelet 判斷「本機已有」就不重拉）。
+  # sha-<commit> 每次都是全新、唯一的 tag，才會真的觸發新的 image pull，
+  # 而且 git log 裡永遠精確反映叢集現在跑的是哪個 commit，
+  # 不必另外去 GHCR 對 digest 才知道版本。
+  update-gitops:
+    name: Deploy to Cluster (update cool-gitops)
+    needs: [build-containers]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout cool-gitops
+        uses: actions/checkout@v7
+        with:
+          repository: fly530/cool-gitops
+          # 預設 GITHUB_TOKEN 只能動 CastFlow 自己這個 repo，跨 repo
+          # 寫入需要另外授權的 PAT。範圍只給到 cool-gitops，不要用
+          # 帳號層級的 token。
+          token: ${{ secrets.COOL_GITOPS_PAT }}
+          path: cool-gitops
+
+      - name: Set new image tags via kustomize
+        working-directory: cool-gitops/apps/castflow
+        run: |
+          SHA_TAG="sha-${GITHUB_SHA::7}"
+          echo "部署版本：${SHA_TAG}"
+
+          curl -sSLo /tmp/kustomize.tar.gz \
+            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz
+          tar -xzf /tmp/kustomize.tar.gz -C /tmp
+
+          /tmp/kustomize edit set image \
+            "ghcr.io/fly530/castflow-server=ghcr.io/fly530/castflow-server:${SHA_TAG}" \
+            "ghcr.io/fly530/castflow-gateway=ghcr.io/fly530/castflow-gateway:${SHA_TAG}"
+
+      - name: Commit and push
+        working-directory: cool-gitops
+        run: |
+          git config user.name "castflow-ci[bot]"
+          git config user.email "castflow-ci@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "image tag 沒有變化，跳過 commit。"
+            exit 0
+          fi
+
+          git add apps/castflow/kustomization.yaml
+          git commit -m "chore(castflow): deploy sha-${GITHUB_SHA::7}
+
+          Source: https://github.com/fly530/CastFlow/commit/${GITHUB_SHA}"
+          git push
