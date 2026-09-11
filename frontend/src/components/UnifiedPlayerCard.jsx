@@ -24,6 +24,7 @@ export default function UnifiedPlayerCard({
   currentTrack,
   upcoming = [],
   online = false,
+  bitrate,
   onOpenInfoModal,
   onSwitchToAdmin,
   currentUser
