@@ -145,6 +145,18 @@ docker logs castflow-server | grep -E "Password|admin"
 
 ---
 
+## Komodo + Traefik 部署（拉取式）
+
+映像由 GitHub Actions 建好推到 GHCR（`castflow-server` / `castflow-gateway`），主機只負責拉取。
+請使用 [`compose.komodo.yaml`](./compose.komodo.yaml)（不發布 port、加入外部網路 `proxy-net` 給 Traefik、資料用具名 volume）。
+
+1. 以本 repo 建立 Komodo Stack，**File Paths** 填 `compose.komodo.yaml`。
+2. Stack 的 **Environment** 填 `JWT_SECRET`、`ICECAST_SOURCE_PASSWORD`、`ICECAST_ADMIN_PASSWORD`、`CASTFLOW_HOST`（範本見 `.env.example`）。
+3. GHCR 套件若是私有，Stack 的 Image Registry 設 `ghcr.io`（PAT 只需 `read:packages`）。
+4. 開 **Poll for Updates** + **Auto Update**；要回滾就把映像標籤改成 `sha-<短碼>`。
+
+---
+
 ## K3s / Kubernetes 叢集部署
 
 本專案提供符合生產級別的 K8s 部署資源定義清單：

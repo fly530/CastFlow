@@ -1,0 +1,154 @@
+# CastFlow 網路電台：icecast + liquidsoap + server + gateway（nginx）。
+# 這是「Komodo + Traefik」部署用的 compose（一般單機請用 docker-compose.yml）。
+# Komodo Stack 的 File Paths 請指定 compose.komodo.yaml。
+# 對外只有 gateway，經 Traefik（proxy-net）以 HTTPS 提供；不直接發布 host port。
+# 由 Komodo 以 Stack 部署（拉取式）：server / gateway 由 GitHub Actions 建好推到 GHCR，
+# Stack 開 Poll for Updates + Auto Update；GHCR 套件若是私有，Image Registry 設 ghcr.io
+# （PAT 只需 read:packages）。不需要 Pre Build Images。
+#
+# ★ 啟動前必須先在 .env（Komodo 的 Environment）設定下列值，否則 compose
+#   在建立任何容器之前就會停下來並印出該做什麼（見 ${VAR:?} 語法）：
+#
+#   JWT_SECRET=$(openssl rand -hex 32)
+#   ICECAST_SOURCE_PASSWORD=$(openssl rand -hex 16)
+#   ICECAST_ADMIN_PASSWORD=$(openssl rand -hex 16)
+#   CASTFLOW_HOST=radio.example.com        # Traefik 路由用的網域
+#
+# 為什麼用 ${VAR:?訊息} 而不是讓它預設成空字串：
+# 空字串的話 compose 只會印一行 warning 然後照常啟動 —— 使用者得到的是
+# 一個「看起來啟動成功、實際上壞掉」的堆疊：server 無限重啟、liquidsoap
+# 被 Icecast 回 401、/stream 與 /hls 全部 404。
+#
+# 首次登入的管理員密碼是隨機產生，印在 server 的啟動日誌：
+#   docker logs castflow-server | grep -A4 "CastFlow Security"
+name: castflow
+
+services:
+  icecast:
+    image: libretime/icecast:2.4.4-alpine
+    container_name: castflow-icecast
+    restart: unless-stopped
+    expose:
+      - "8000"
+    environment:
+      # libretime/icecast 只認 ICECAST_SOURCE_PASSWORD / ICECAST_RELAY_PASSWORD /
+      # ICECAST_ADMIN_PASSWORD 等變數；ICECAST_PASSWORD 會被無聲丟棄。
+      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:?未設定。請先建立 .env，見本檔開頭}
+      - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:?未設定。請先建立 .env，見本檔開頭}
+
+  liquidsoap:
+    image: savonet/liquidsoap:v2.2.5
+    container_name: castflow-liquidsoap
+    restart: unless-stopped
+    depends_on:
+      - icecast
+    expose:
+      - "1234"
+    environment:
+      - ICECAST_HOST=icecast
+      - ICECAST_PORT=8000
+      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:?未設定。請先建立 .env，見本檔開頭}
+      - ICECAST_MOUNT=stream
+      - MUSIC_DIR=/music
+      - HLS_DIR=/output/hls
+    volumes:
+      - ./liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro
+      - music:/music
+      - hls-ram:/output/hls
+    command: ["/etc/liquidsoap/radio.liq"]
+
+  # 具名 volume 第一次建立時是 root 擁有，但 server 以 uid 1000（node）執行、
+  # 要寫入這三個目錄。原本的 bind mount 沒有這個問題，改具名 volume 後
+  # 由這個一次性容器補上擁有者；server 等它跑完才啟動。
+  volume-init:
+    image: alpine:3.22
+    container_name: castflow-volume-init
+    restart: "no"
+    command: ["chown", "1000:1000", "/music", "/data", "/backups"]
+    volumes:
+      - music:/music
+      - data:/data
+      - backups:/backups
+
+  server:
+    # 映像檔由 GitHub Actions 建好推到 GHCR（見 .github/workflows/release.yml），
+    # Komodo 只負責拉取並啟動。latest 是最新一次 main 的建置；要回滾請改成 sha-<短碼> 標籤。
+    image: ghcr.io/fly530/castflow-server:latest
+    pull_policy: always
+    container_name: castflow-server
+    restart: unless-stopped
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+      liquidsoap:
+        condition: service_started
+      icecast:
+        condition: service_started
+    expose:
+      - "3001"
+    environment:
+      - PORT=3001
+      - JWT_SECRET=${JWT_SECRET:?未設定。請先建立 .env，見本檔開頭}
+      - LIQUIDSOAP_HOST=liquidsoap
+      - LIQUIDSOAP_PORT=1234
+      - ICECAST_HOST=icecast
+      - ICECAST_PORT=8000
+      - ICECAST_MOUNT=stream
+      - MUSIC_DIR=/music
+      - DATA_DIR=/data
+      - BACKUP_DIR=/backups
+    volumes:
+      - music:/music
+      - data:/data
+      - backups:/backups
+
+  gateway:
+    image: ghcr.io/fly530/castflow-gateway:latest
+    pull_policy: always
+    container_name: castflow-gateway
+    restart: unless-stopped
+    depends_on:
+      - server
+      - liquidsoap
+      - icecast
+    # 容器內是 8080（nginx-unprivileged，非 root）。不發布 host port，
+    # 由 Traefik 經 proxy-net 轉進來；同時留在預設網路才連得到 server / icecast。
+    expose:
+      - "8080"
+    volumes:
+      - hls-ram:/usr/share/nginx/hls:ro
+    networks:
+      - default
+      - proxy-net
+    # 聽眾頁、串流與 API 要公開，所以沒有 admin-whitelist；
+    # 管理後台 /admin 靠應用程式自己的 JWT 登入把關。
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy-net"
+      - "traefik.http.routers.castflow.rule=Host(`${CASTFLOW_HOST:?未設定。請在 .env 設定 CASTFLOW_HOST}`)"
+      - "traefik.http.routers.castflow.entrypoints=websecure"
+      - "traefik.http.routers.castflow.tls.certresolver=myresolver"
+      - "traefik.http.services.castflow.loadbalancer.server.port=8080"
+
+volumes:
+  # 資料都放具名 volume，不再用 ./music ./data ./backups 相對路徑 bind mount：
+  # 相對路徑會落在 Komodo 的 repo checkout 裡，重新 clone 就可能遺失。
+  # 實名固定；改 name: 會指向一顆新的空 volume，資料不會跟過去。
+  music:
+    name: castflow_music
+  data:
+    name: castflow_data
+  backups:
+    name: castflow_backups
+  hls-ram:
+    name: castflow_hls_ram
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=64m,mode=1777"
+
+networks:
+  # 外部網路，需事先建立（scripts/create-networks.sh）
+  proxy-net:
+    external: true

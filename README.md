@@ -147,6 +147,18 @@ docker logs castflow-server | grep -E "Password|admin"
 
 ---
 
+## Komodo + Traefik Deployment (pull model)
+
+GitHub Actions builds `castflow-server` / `castflow-gateway` and pushes them to GHCR; the host only pulls.
+Use [`compose.komodo.yaml`](./compose.komodo.yaml) (no published port, joins the external `proxy-net` for Traefik, named volumes).
+
+1. Create a Komodo Stack from this repo, **File Paths** = `compose.komodo.yaml`.
+2. Stack **Environment**: `JWT_SECRET`, `ICECAST_SOURCE_PASSWORD`, `ICECAST_ADMIN_PASSWORD`, `CASTFLOW_HOST` (see `.env.example`).
+3. If the GHCR packages are private, set the Image Registry of the Stack to `ghcr.io` (PAT with `read:packages`).
+4. Enable **Poll for Updates** + **Auto Update**. To roll back, pin the image tag to `sha-<short>`.
+
+---
+
 ## Kubernetes / K3s Deployment
 
 Production-grade Kubernetes manifests are provided in the `k8s/` directory:
