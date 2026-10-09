@@ -48,10 +48,9 @@ services:
     command: ["/etc/liquidsoap/radio.liq"]
 
   server:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
+    # 映像檔由 GitHub Actions 建好推到 GHCR（見 .github/workflows/release.yml），這裡只拉取不自建。
     image: ghcr.io/fly530/castflow-server:latest
+    pull_policy: always
     container_name: castflow-server
     restart: unless-stopped
     depends_on:
@@ -76,10 +75,8 @@ services:
       - ./backups:/backups
 
   gateway:
-    build:
-      context: .
-      dockerfile: gateway/Dockerfile
     image: ghcr.io/fly530/castflow-gateway:latest
+    pull_policy: always
     container_name: castflow-gateway
     restart: unless-stopped
     depends_on:
