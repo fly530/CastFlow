@@ -13,6 +13,12 @@
 #   ICECAST_SOURCE_PASSWORD=$(openssl rand -hex 16)
 #   ICECAST_ADMIN_PASSWORD=$(openssl rand -hex 16)
 #   CASTFLOW_HOST=radio.example.com        # Traefik 路由用的網域
+#   CASTFLOW_DATA_DIR=/var/lib/castflow    # 主機上存放音樂/資料庫/備份的絕對路徑
+#
+# 資料目錄要先在主機建好並交給 uid 1000（server 以 node 使用者執行）：
+#   sudo mkdir -p "$CASTFLOW_DATA_DIR"/{music,data,backups}
+#   sudo chown -R 1000:1000 "$CASTFLOW_DATA_DIR"
+# 沒先建的話 Docker 會自動建成 root 擁有，server 就寫不進去。
 #
 # 為什麼用 ${VAR:?訊息} 而不是讓它預設成空字串：
 # 空字串的話 compose 只會印一行 warning 然後照常啟動 —— 使用者得到的是
@@ -53,22 +59,9 @@ services:
       - HLS_DIR=/output/hls
     volumes:
       - ./liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro
-      - music:/music
+      - ${CASTFLOW_DATA_DIR:?未設定。請在 .env 設定 CASTFLOW_DATA_DIR}/music:/music
       - hls-ram:/output/hls
     command: ["/etc/liquidsoap/radio.liq"]
-
-  # 具名 volume 第一次建立時是 root 擁有，但 server 以 uid 1000（node）執行、
-  # 要寫入這三個目錄。原本的 bind mount 沒有這個問題，改具名 volume 後
-  # 由這個一次性容器補上擁有者；server 等它跑完才啟動。
-  volume-init:
-    image: alpine:3.22
-    container_name: castflow-volume-init
-    restart: "no"
-    command: ["chown", "1000:1000", "/music", "/data", "/backups"]
-    volumes:
-      - music:/music
-      - data:/data
-      - backups:/backups
 
   server:
     # 映像檔由 GitHub Actions 建好推到 GHCR（見 .github/workflows/release.yml），
@@ -78,8 +71,6 @@ services:
     container_name: castflow-server
     restart: unless-stopped
     depends_on:
-      volume-init:
-        condition: service_completed_successfully
       liquidsoap:
         condition: service_started
       icecast:
@@ -98,9 +89,9 @@ services:
       - DATA_DIR=/data
       - BACKUP_DIR=/backups
     volumes:
-      - music:/music
-      - data:/data
-      - backups:/backups
+      - ${CASTFLOW_DATA_DIR:?未設定。請在 .env 設定 CASTFLOW_DATA_DIR}/music:/music
+      - ${CASTFLOW_DATA_DIR:?未設定。請在 .env 設定 CASTFLOW_DATA_DIR}/data:/data
+      - ${CASTFLOW_DATA_DIR:?未設定。請在 .env 設定 CASTFLOW_DATA_DIR}/backups:/backups
 
   gateway:
     image: ghcr.io/fly530/castflow-gateway:latest
@@ -131,15 +122,9 @@ services:
       - "traefik.http.services.castflow.loadbalancer.server.port=8080"
 
 volumes:
-  # 資料都放具名 volume，不再用 ./music ./data ./backups 相對路徑 bind mount：
+  # 音樂/資料庫/備份用主機上的絕對路徑（CASTFLOW_DATA_DIR），不用相對路徑：
   # 相對路徑會落在 Komodo 的 repo checkout 裡，重新 clone 就可能遺失。
-  # 實名固定；改 name: 會指向一顆新的空 volume，資料不會跟過去。
-  music:
-    name: castflow_music
-  data:
-    name: castflow_data
-  backups:
-    name: castflow_backups
+  # HLS 切片只是暫存，放記憶體（tmpfs）。
   hls-ram:
     name: castflow_hls_ram
     driver: local
@@ -149,6 +134,6 @@ volumes:
       o: "size=64m,mode=1777"
 
 networks:
-  # 外部網路，需事先建立（scripts/create-networks.sh）
+  # 外部網路（Traefik 所在的網路），需事先建立：docker network create proxy-net
   proxy-net:
     external: true
