@@ -7,7 +7,7 @@ CastFlow is a modern, lightweight, cloud-native automated radio broadcasting and
 It is engineered to provide developers, station administrators, and homelab hobbyists with a highly customizable, low-resource audio broadcasting architecture. It supports dual-stream outputs for IoT hardware (ESP32 / VLC) and modern browsers (Web HLS), with precision scheduling, dynamic shuffling, and broadcast-grade smooth crossfading.
 
 ## 2. Core Architecture
-Based on a microservice architecture, CastFlow can be operated locally via Docker Compose or deployed onto K3s/Kubernetes clusters (isolated within the `castflow` namespace):
+Based on a microservice architecture, CastFlow can be operated locally via Docker Compose or deployed with Komodo + Traefik from prebuilt images:
 
 ### Audio Engine Core:
 * **Icecast 2.4**: Responsible for audio distribution (MP3 stream output for ESP32 and external players).
@@ -30,7 +30,7 @@ Based on a microservice architecture, CastFlow can be operated locally via Docke
 * Features vinyl turntable animation, dynamic album art, track progress bar, upcoming track queue, and keyboard shortcuts.
 
 ## 3. Tech Stack
-* **Infrastructure**: Docker Compose / Kubernetes (K3s), modular YAMLs (namespace, pvc, configmap, deployment, service).
+* **Infrastructure**: Docker Compose (`docker-compose.yml` for standalone, `compose.komodo.yaml` for Komodo + Traefik); images built by GitHub Actions and published to GHCR.
 * **Streaming Core**: `savonet/liquidsoap:v2.2.5`, `libretime/icecast:2.4.4-alpine`.
 * **Backend API**: Node.js (Express), SQLite (better-sqlite3 WAL), WebSocket (`ws`), JWT (`jsonwebtoken`), `music-metadata`.
 * **Frontend**: React 18, Vite, TailwindCSS, Lucide Icons, HLS.js.
@@ -44,7 +44,6 @@ Based on a microservice architecture, CastFlow can be operated locally via Docke
 
 ## 5. Directory Structure
 ```plaintext
-/k8s                  # K3s / Kubernetes manifests (00-namespace through 80-admin)
 /gateway              # Unified Nginx Gateway & reverse proxy service
 /server               # Backend API & WebSocket service (Node.js)
 /frontend             # Unified Frontend (React + TailwindCSS + HLS.js, dual view switcher)

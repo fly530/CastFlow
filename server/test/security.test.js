@@ -152,17 +152,4 @@ describe('④ 容器不得以 root 執行', () => {
     assert.match(read('gateway/Dockerfile'), /FROM\s+nginxinc\/nginx-unprivileged/);
     assert.match(read('gateway/nginx.conf'), /listen\s+8080;/);
   });
-
-  test('k8s 清單宣告 runAsNonRoot', () => {
-    for (const f of ['k8s/60-server.yaml', 'k8s/70-gateway.yaml']) {
-      assert.match(read(f), /runAsNonRoot:\s*true/, `${f} 缺少 runAsNonRoot`);
-    }
-  });
-
-  test('共用 PVC 的兩個 Pod fsGroup 必須相同', () => {
-    const get = (f) => read(f).match(/fsGroup:\s*(\d+)/)?.[1];
-    assert.equal(get('k8s/60-server.yaml'), get('k8s/70-gateway.yaml'),
-      'fsGroup 不同會讓兩邊互相 chgrp 同一個 radio-music-pvc');
-    assert.ok(get('k8s/60-server.yaml'));
-  });
 });

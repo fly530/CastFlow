@@ -15,8 +15,8 @@ COPY src/ ./src/
 # 解壓、刪除）都會直接放大成容器內的 root 權限。縱深防禦：程式碼那層已經
 # 修過，這一層讓「萬一還有沒找到的」影響範圍小一級。
 #
-# 掛載的 volume 需要 uid 1000 可寫。k8s 用 podSecurityContext.fsGroup: 1000
-# 處理（k8s/60-server.yaml）；docker compose 走 bind mount，見該檔說明。
+# 掛載的目錄需要 uid 1000 可寫：bind mount 的主機目錄要先 chown 1000:1000，
+# 見 compose.komodo.yaml 開頭說明。
 USER node
 
 EXPOSE 3001

@@ -59,9 +59,9 @@ flowchart TD
 
 ## 核心特色
 
-* ☁️ **雲原生微服務與雙軌部署**：
+* ☁️ **雲原生微服務與彈性部署**：
   * **Docker Compose**：單機一鍵秒級啟動，適合個人自架或邊緣伺服器。
-  * **Kubernetes / K3s**：開箱即用的標準 YAML 清單（包含 Namespace 隔離、PVC 共享儲存、ConfigMap 掛載與健康探針）。
+  * **Komodo + Traefik**：由 GHCR 預建映像以拉取式部署，搭配 Traefik 反向代理（見下方說明）。
 * 📻 **雙軌串流輸出**：
   * **Icecast MP3 串流 (`/stream`)**：支援 ESP32 / Arduino 等物聯網硬體播放器、傳統播放器（VLC、foobar2000）。
   * **Web HLS 串流 (`/hls`)**：採用 HLS.js，為現代 Web 瀏覽器提供低延遲且穩定的切片播放。
@@ -157,58 +157,13 @@ docker logs castflow-server | grep -E "Password|admin"
 
 ---
 
-## K3s / Kubernetes 叢集部署
-
-本專案提供符合生產級別的 K8s 部署資源定義清單：
-
-```bash
-# 1. 建立 Namespace
-kubectl apply -f k8s/00-namespace.yaml
-
-# 2. 產生 Secret（★ 必要步驟，不做的話 server 會拒絕啟動）
-#    金鑰用指令現場生成，不寫進檔案、不進版控。
-kubectl -n castflow create secret generic castflow-secrets \
-  --from-literal=jwt-secret="$(openssl rand -hex 32)" \
-  --from-literal=icecast-source-password="$(openssl rand -hex 16)" \
-  --from-literal=icecast-admin-password="$(openssl rand -hex 16)"
-
-# 3. 預先驗證部署清單語法
-kubectl apply -k k8s/ --dry-run=client
-
-# 4. 部署至 K8s 叢集 (預設命名空間: castflow)
-kubectl apply -k k8s/
-
-# 5. 取得首次登入的管理員隨機密碼
-kubectl -n castflow logs deploy/server | grep -A4 "CastFlow Security"
-```
-
-> **關於對外存取**：`70-gateway.yaml` 的 Service 採用標準 `type: ClusterIP`，並搭配 `80-ingress.yaml` 由叢集既有的 Ingress Controller（如 K3s 內建 Traefik、Nginx Ingress）在標準 **Port 80** 統一反向代理。預設域名為 `castflow.local`（可於本機 hosts 加入 `<節點IP> castflow.local` 或替換為自有網域）。
-> 若叢集未安裝 Ingress Controller、且欲直接以節點 IP 裸連存取，可將 `70-gateway.yaml` 的 Service 調整為 `type: NodePort`。
-
-> **關於更新映像**：清單使用 `:latest` + `imagePullPolicy: IfNotPresent`。
-> 重新建置同名 tag 後 Deployment **不會**自動察覺，需手動觸發：
-> `kubectl -n castflow rollout restart deploy/server deploy/gateway`
-> 正式環境建議改用帶版號的 tag。
-
-部署清單包含：
-* `00-namespace.yaml`: 隔離至獨立 `castflow` Namespace。
-* `10-configmap.yaml`: 動態掛載 Liquidsoap 排程腳本（內容需與 `liquidsoap/radio.liq` 完全一致，CI 有檢查）。
-* `15-secret.yaml.example`: Secret 範本與生成指令。**刻意不是 `.yaml`**，以免帶著佔位金鑰被 `kubectl apply -k k8s/` 套進叢集。
-* `20-pvc.yaml`: 音訊檔案、資料庫與備份檔之 PersistentVolumeClaims (ReadWriteOnce 適配 local-path)。
-* `30-icecast.yaml`: 核心音訊推流伺服器 Icecast Deployment。
-* `50-service.yaml`: 內部服務轉發路由 (Icecast 與 Liquidsoap ClusterIP)。
-* `60-server.yaml`: 後端 Node.js API 伺服器 Deployment 與 Service。
-* `70-gateway.yaml`: 單一整合 Gateway 與 Liquidsoap (同 Pod 共享記憶體 tmpfs 零磁碟耗損 + 內部 ClusterIP Service)。
-* `80-ingress.yaml`: 標準 Kubernetes Ingress 路由規則（支援 Traefik 與 Nginx-Ingress，預設域名 `castflow.local`）。
-* `90-networkpolicy.yaml`: 限制 Liquidsoap Telnet (1234) 僅接受 server Pod 連入（需 CNI 支援 NetworkPolicy 才生效）。
-
-### 排程的執行依賴
+## 排程的執行依賴
 
 排程判斷全部在後端 Node.js 的 AutoDJ 排程器（每 5 秒一次），透過 Telnet 推送至
 Liquidsoap 的 `dynamic_queue`；`radio.liq` 本身只負責播放佇列與轉場，不含任何時段邏輯。
 這確保後台改排程立即生效、不需重載 Liquidsoap。
 
-代價是 **`server` Pod 停止時排程會失效**：廣播不會中斷（`dynamic_queue` 為空時自動
+代價是 **`server` 容器停止時排程會失效**：廣播不會中斷（`dynamic_queue` 為空時自動
 fallback 到 A 歌單隨機播放），但會安靜地退化成只播 A，沒有任何外顯錯誤。
 建議將 `server` 的 `/health` 納入監控告警。
 

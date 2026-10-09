@@ -59,9 +59,9 @@ flowchart TD
 
 ## Key Features
 
-* ☁️ **Cloud-Native Microservices & Dual Deployment**:
+* ☁️ **Cloud-Native Microservices & Flexible Deployment**:
   * **Docker Compose**: One-click startup in seconds for standalone servers or homelab.
-  * **Kubernetes / K3s**: Production-ready YAML manifests included (Namespace isolation, PVC shared storage, dynamic ConfigMap mounting, and health probes).
+  * **Komodo + Traefik**: Pull-model deployment from prebuilt GHCR images behind a Traefik reverse proxy (see below).
 * 📻 **Dual-Track Stream Output**:
   * **Icecast MP3 Stream (`/stream`)**: Direct streaming for ESP32/Arduino IoT devices and legacy players (VLC, foobar2000).
   * **Web HLS Stream (`/hls`)**: Powered by HLS.js for low-latency, stutter-free playback across all modern desktop and mobile browsers.
@@ -159,59 +159,14 @@ Use [`compose.komodo.yaml`](./compose.komodo.yaml) (no published port, joins the
 
 ---
 
-## Kubernetes / K3s Deployment
-
-Production-grade Kubernetes manifests are provided in the `k8s/` directory:
-
-```bash
-# 1. Create the namespace
-kubectl apply -f k8s/00-namespace.yaml
-
-# 2. Create the Secret (REQUIRED — the server refuses to start without it).
-#    Keys are generated on the spot; they never touch a file or version control.
-kubectl -n castflow create secret generic castflow-secrets \
-  --from-literal=jwt-secret="$(openssl rand -hex 32)" \
-  --from-literal=icecast-source-password="$(openssl rand -hex 16)" \
-  --from-literal=icecast-admin-password="$(openssl rand -hex 16)"
-
-# 3. Validate manifest syntax
-kubectl apply -k k8s/ --dry-run=client
-
-# 4. Deploy to Kubernetes cluster (default namespace: castflow)
-kubectl apply -k k8s/
-
-# 5. Read the generated initial admin password
-kubectl -n castflow logs deploy/server | grep -A4 "CastFlow Security"
-```
-
-> **External access**: the Service in `70-gateway.yaml` uses standard `type: ClusterIP`, routed via `80-ingress.yaml` through the cluster's Ingress Controller (e.g. Traefik in K3s, Nginx Ingress) on standard **Port 80**. The default host is `castflow.local` (map `<node-ip> castflow.local` in `/etc/hosts` or change to your custom domain).
-> On clusters without an Ingress controller where direct IP access is preferred, switch `70-gateway.yaml` to `type: NodePort`.
-
-> **Updating images**: the manifests use `:latest` with `imagePullPolicy: IfNotPresent`.
-> Rebuilding the same tag does **not** trigger a rollout; run
-> `kubectl -n castflow rollout restart deploy/server deploy/gateway`.
-> Use versioned tags in production.
-
-Included manifests:
-* `00-namespace.yaml`: Creates the dedicated `castflow` namespace.
-* `10-configmap.yaml`: Mounts dynamic Liquidsoap scripts (must stay byte-identical to `liquidsoap/radio.liq`; enforced in CI).
-* `15-secret.yaml.example`: Secret template and generation commands. **Deliberately not `.yaml`**, so placeholder credentials can never be applied by `kubectl apply -k k8s/`.
-* `20-pvc.yaml`: PersistentVolumeClaims for audio files, database, and backups (ReadWriteOnce for local-path).
-* `30-icecast.yaml`: Icecast audio streaming server deployment.
-* `50-service.yaml`: Core internal ClusterIP service routing (icecast & liquidsoap).
-* `60-server.yaml`: Backend Node.js API server Deployment & Service.
-* `70-gateway.yaml`: Unified Gateway + Liquidsoap core (Multi-container Pod sharing in-memory tmpfs emptyDir + ClusterIP Service).
-* `80-ingress.yaml`: Standard Kubernetes Ingress routing rules (supports Traefik & Nginx-Ingress, default host `castflow.local`).
-* `90-networkpolicy.yaml`: Restricts the Liquidsoap Telnet port (1234) to the `server` Pod (requires a NetworkPolicy-capable CNI).
-
-### Scheduling runtime dependency
+## Scheduling Runtime Dependency
 
 All scheduling decisions live in the backend Node.js AutoDJ scheduler (a 5-second tick),
 which pushes tracks into Liquidsoap's `dynamic_queue` over Telnet. `radio.liq` itself only
 handles the queue and crossfades — it contains no time-of-day logic. That is what makes
 admin-console schedule edits take effect immediately without reloading Liquidsoap.
 
-The trade-off: **when the `server` Pod is down, scheduling stops**. Broadcast does not go
+The trade-off: **when the `server` container is down, scheduling stops**. Broadcast does not go
 silent (an empty `dynamic_queue` falls back to shuffling playlist A), but it quietly
 degrades to A-only with no visible error. Wire `server`'s `/health` into your alerting.
 

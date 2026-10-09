@@ -7,7 +7,7 @@
 旨在提供開發者、站長與自架愛好者一個可高度客製化且資源佔用極低的廣播架構。系統支援物聯網硬體播放器（ESP32 / VLC）與現代瀏覽器（Web HLS）的雙軌串流輸出，並具備精準的排程插播、打亂與廣播級智慧淡入淡出（Crossfade）功能。
 
 ## 2. 核心架構 (Core Architecture)
-本系統基於雲原生微服務架構，主要分為四個核心模組，可透過 Docker Compose 本地運行或部署於 K3s/Kubernetes 叢集（隔離於 `castflow` 命名空間內）：
+本系統基於雲原生微服務架構，主要分為四個核心模組，可透過 Docker Compose 本地運行，或以 Komodo + Traefik 拉取預建映像部署：
 
 ### 廣播引擎底層 (Streaming Engine):
 * **Icecast 2.4**：負責音訊串流分發（輸出 MP3 供 ESP32 / 外部播放器使用）。
@@ -30,7 +30,7 @@
 * 擬真黑膠唱片旋轉封面、當前歌名/演出者、動態播放進度條、即將播放佇列 (Upcoming Tracks) 與鍵盤快捷鍵。
 
 ## 3. 技術棧 (Tech Stack)
-* **基礎設施**：Docker Compose / Kubernetes (K3s)，標準分離 YAML（namespace, pvc, configmap, deployment, service）。
+* **基礎設施**：Docker Compose（`docker-compose.yml` 單機版、`compose.komodo.yaml` Komodo + Traefik 版），映像由 GitHub Actions 建置並推送至 GHCR。
 * **廣播底層**：`savonet/liquidsoap:v2.2.5` (排程與混音核心), `libretime/icecast:2.4.4-alpine` (MP3 串流廣播分發)。
 * **後端 API**：Node.js (Express), SQLite (better-sqlite3 WAL), WebSocket (`ws`), JWT (`jsonwebtoken`), `music-metadata`。
 * **前端 UI**：React 18, Vite, TailwindCSS, Lucide Icons, HLS.js。
@@ -44,7 +44,6 @@
 
 ## 5. 專案目錄結構 (Directory Structure)
 ```plaintext
-/k8s                  # K3s / Kubernetes 部署 YAML (00-namespace 至 80-admin)
 /gateway              # 統一 Nginx 網關與反向代理服務
 /server               # 後端 API 與 WebSocket 服務 (Node.js)
 /frontend             # 單一統合前端 (React + TailwindCSS + HLS.js，雙視圖切換)
