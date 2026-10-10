@@ -25,6 +25,13 @@ services:
       # ICECAST_ADMIN_PASSWORD 等變數；ICECAST_PASSWORD 會被無聲丟棄。
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:?未設定。請先建立 .env，見本檔開頭}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:?未設定。請先建立 .env，見本檔開頭}
+    healthcheck:
+      # 狀態端點在 icecast 起來後即可公開讀取；alpine 映像的 busybox wget 可用
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/status-json.xsl >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   liquidsoap:
     image: savonet/liquidsoap:v2.2.5
@@ -58,6 +65,13 @@ services:
       - icecast
     expose:
       - "3001"
+    healthcheck:
+      # server 的 GET /health（src/index.js）；node:alpine 的 busybox wget 可用
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     environment:
       - PORT=3001
       - JWT_SECRET=${JWT_SECRET:?未設定。請先建立 .env，見本檔開頭}
