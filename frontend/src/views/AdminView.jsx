@@ -386,12 +386,13 @@ export default function AdminView({
           setIsPlaylistModalOpen(false);
           setEditingPlaylist(null);
         }}
-        playlist={editingPlaylist}
-        onSuccess={() => {
-          showToast('歌單資訊已更新');
+        editingPlaylist={editingPlaylist}
+        onSaved={(msg) => {
+          showToast(msg || '歌單資訊已更新');
           setPlaylistRefreshKey((k) => k + 1);
           fetchStatus();
         }}
+        onRequestLogin={() => setIsLoginOpen(true)}
       />
     </div>
   );
