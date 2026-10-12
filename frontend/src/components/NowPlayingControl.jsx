@@ -13,15 +13,25 @@ import {
   ListMusic,
   Clock
 } from 'lucide-react';
+import { authFetch } from '../utils/api.js';
 
 export default function NowPlayingControl({
-  currentTrack,
-  upcomingTracks = [],
-  bitrate = 256,
+  status,
+  currentTrack: propCurrentTrack,
+  upcomingTracks: propUpcomingTracks,
+  bitrate: propBitrate,
+  currentUser,
   onSkip,
+  onTrackSkipped,
   onReload,
-  onOpenConsole
+  onOpenConsole,
+  onRequestLogin,
+  showToast
 }) {
+  const currentTrack = propCurrentTrack || status?.currentTrack;
+  const upcomingTracks = propUpcomingTracks || status?.upcomingTracks || [];
+  const bitrate = propBitrate || status?.icecast?.bitrate || 256;
+
   const [isSkipping, setIsSkipping] = useState(false);
   const [skipSuccess, setSkipSuccess] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
@@ -122,7 +132,23 @@ export default function NowPlayingControl({
       setIsResettingProgress(true);
       setTimeout(() => setIsResettingProgress(false), 50);
       const startTime = Date.now();
-      await onSkip();
+
+      if (onSkip) {
+        await onSkip();
+      } else {
+        const res = await authFetch('/api/control/skip', { method: 'POST' });
+        if (res.status === 401) {
+          showToast?.('請先以管理員身分登入後再執行跳歌');
+          onRequestLogin?.();
+          return;
+        }
+        if (onTrackSkipped) {
+          onTrackSkipped();
+        } else {
+          showToast?.('已跳播至下一首');
+        }
+      }
+
       // 保證至少 800ms 的轉場視覺反饋，避免閃爍過快讓人感覺無反應
       const elapsed = Date.now() - startTime;
       if (elapsed < 800) {
@@ -130,6 +156,8 @@ export default function NowPlayingControl({
       }
       setSkipSuccess(true);
       setTimeout(() => setSkipSuccess(false), 2000);
+    } catch (err) {
+      showToast?.(`跳歌失敗: ${err.message}`);
     } finally {
       setIsSkipping(false);
     }
@@ -138,7 +166,14 @@ export default function NowPlayingControl({
   const handleReload = async () => {
     try {
       setIsReloading(true);
-      await onReload();
+      if (onReload) {
+        await onReload();
+      } else {
+        await authFetch('/api/control/reload', { method: 'POST' });
+        showToast?.('廣播排程已強制重新載入');
+      }
+    } catch (err) {
+      showToast?.(`重新載入失敗: ${err.message}`);
     } finally {
       setIsReloading(false);
     }

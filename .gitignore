@@ -26,6 +26,7 @@ music/*
 .env.*.local
 *.pem
 *.key
+docker-compose.override.yml
 
 # Logs
 logs/

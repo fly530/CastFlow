@@ -702,8 +702,11 @@ export default function UnifiedPlayerCard({
                 )}
               </div>
 
-              {/* 大標題 */}
-              <h2 className="text-2xl sm:text-3xl xl:text-4xl font-black text-white tracking-tight leading-tight line-clamp-2 drop-shadow">
+              {/* 大標題 (單行截斷避免折行，滑鼠懸停可看完整歌名) */}
+              <h2
+                className="text-2xl sm:text-3xl xl:text-4xl font-black text-white tracking-tight leading-tight truncate drop-shadow"
+                title={syncedTrack?.title || 'CastFlow Live'}
+              >
                 {syncedTrack?.title || 'CastFlow Live'}
               </h2>
 

@@ -198,6 +198,9 @@ export default function AdminView({
           <div className="space-y-6">
             <NowPlayingControl
               status={status}
+              currentTrack={status?.currentTrack}
+              upcomingTracks={status?.upcomingTracks || []}
+              bitrate={status?.icecast?.bitrate || 256}
               currentUser={currentUser}
               onOpenConsole={() => setIsConsoleOpen(true)}
               onTrackSkipped={() => {
