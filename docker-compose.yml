@@ -13,6 +13,8 @@
 # 被 Icecast 回 401、/stream 與 /hls 全部 404。訊息淹沒在啟動輸出裡。
 # 用 :? 的話 compose 在建立任何容器之前就停下來，並印出該做什麼。
 # ==============================================================================
+name: castflow
+
 services:
   icecast:
     image: libretime/icecast:2.4.4-alpine
