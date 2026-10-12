@@ -103,9 +103,9 @@ router.post('/auth/change-password', requireAuth, async (req, res) => {
 // ==============================================================================
 
 /**
- * 廣播系統即時狀態
+ * 廣播系統即時狀態 (支援標準 /status 與自訂 /nowplaying/coolradio 端點)
  */
-router.get('/status', async (req, res) => {
+router.get(['/status', '/nowplaying/coolradio'], async (req, res) => {
   try {
     const status = await getRadioStatus();
     res.json({ success: true, data: status });

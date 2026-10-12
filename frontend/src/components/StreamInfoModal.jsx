@@ -11,7 +11,8 @@ export default function StreamInfoModal({ isOpen, onClose, bitrate = 256 }) {
   const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
   const origin = `${protocol}//${hostname}${port}`;
   const icecastUrl = `${origin}/stream`;
-  const hlsUrl = `${origin}/hls/live.m3u8`;
+  const hlsUrl = `${origin}/hls/coolradio/live.m3u8`;
+  const metaUrl = `${origin}/api/nowplaying/coolradio`;
 
   const copyToClipboard = (text, key) => {
     navigator.clipboard.writeText(text);
@@ -62,7 +63,7 @@ export default function StreamInfoModal({ isOpen, onClose, bitrate = 256 }) {
           {/* HLS 切片串流 */}
           <div className="space-y-1.5">
             <div className="flex justify-between items-center text-xs">
-              <span className="font-semibold text-slate-300">Web HLS 切片播放清單 (現代瀏覽器)</span>
+              <span className="font-semibold text-slate-300">Web HLS 切片播放清單 (HLS_URL)</span>
               <span className="text-indigo-400 font-mono">m3u8</span>
             </div>
             <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs text-slate-300">
@@ -73,6 +74,24 @@ export default function StreamInfoModal({ isOpen, onClose, bitrate = 256 }) {
                 title="複製網址"
               >
                 {copied === 'hls' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          {/* 即時中繼資料 API */}
+          <div className="space-y-1.5">
+            <div className="flex justify-between items-center text-xs">
+              <span className="font-semibold text-slate-300">即時中繼資料端點 (META_URL)</span>
+              <span className="text-pink-400 font-mono">JSON API</span>
+            </div>
+            <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs text-slate-300">
+              <span className="flex-1 truncate">{metaUrl}</span>
+              <button
+                onClick={() => copyToClipboard(metaUrl, 'meta')}
+                className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
+                title="複製網址"
+              >
+                {copied === 'meta' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
               </button>
             </div>
           </div>

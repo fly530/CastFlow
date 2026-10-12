@@ -546,6 +546,7 @@ export async function getRadioStatus() {
     return {
       id: p.id,
       name: p.name,
+      description: p.description || '',
       folder: p.folder,
       color: p.color,
       count: tracks.length,

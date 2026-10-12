@@ -18,7 +18,8 @@ import {
   Plus,
   Radio,
   ListMusic,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Sliders
 } from 'lucide-react';
 import { authFetch } from '../utils/api.js';
 
@@ -26,8 +27,10 @@ export default function PlaylistManager({
   playlists = [],
   onOpenUpload,
   onOpenNewPlaylist,
+  onEditPlaylist,
   onTrackDeleted,
   onRequestLogin,
+  refreshTrigger,
   refreshKey,
   onRefresh
 }) {
@@ -81,7 +84,7 @@ export default function PlaylistManager({
     setSelectedTrackFilenames([]);
     setUploadMsg(null);
     fetchTracks(selectedId);
-  }, [selectedId, refreshKey]);
+  }, [selectedId, refreshKey, refreshTrigger]);
 
   // 上傳提示訊息於 6 秒後自動隱藏
   useEffect(() => {
@@ -615,11 +618,18 @@ export default function PlaylistManager({
                         >
                           {count} 首
                         </span>
-                        {/* 編輯名稱按鈕 */}
+                        {/* 編輯歌單設定按鈕 */}
                         <button
-                          onClick={(e) => handleStartEditPlaylist(e, pl)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onEditPlaylist) {
+                              onEditPlaylist(pl);
+                            } else {
+                              handleStartEditPlaylist(e, pl);
+                            }
+                          }}
                           className="p-1.5 text-slate-400 hover:text-purple-300 hover:bg-purple-500/10 rounded-lg transition-colors"
-                          title="編輯歌單名稱"
+                          title="編輯歌單設定（名稱、播放模式、轉場）"
                         >
                           <Edit2 className="w-3 h-3" />
                         </button>
@@ -660,12 +670,18 @@ export default function PlaylistManager({
                   <ListMusic className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-base font-bold text-white tracking-tight">
                       {currentPlaylist.name}
                     </h3>
                     <span className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700">
                       {tracks.length} 首曲目
+                    </span>
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-purple-500/10 text-purple-300 border border-purple-500/20">
+                      {currentPlaylist.play_mode === 'sequential' ? '循序播放' : '隨機打亂 (Shuffle)'}
+                    </span>
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
+                      {currentPlaylist.transition === 'fade' ? '淡入淡出 (3s)' : currentPlaylist.transition === 'cut' ? '無縫硬切' : '智慧交疊'}
                     </span>
                   </div>
                   {currentPlaylist.description && (
@@ -677,6 +693,15 @@ export default function PlaylistManager({
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onEditPlaylist?.(currentPlaylist)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-semibold transition-all shadow-sm"
+                  title="編輯歌單名稱、播放模式與轉場設定"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  <span>編輯歌單設定</span>
+                </button>
+
                 <button
                   onClick={() => {
                     fetchTracks(selectedId);

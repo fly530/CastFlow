@@ -22,10 +22,8 @@ export default function PlaylistModal({ isOpen, onClose, editingPlaylist, onSave
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
-  const prevIsOpenRef = useRef(false);
-
   useEffect(() => {
-    if (isOpen && !prevIsOpenRef.current) {
+    if (isOpen) {
       if (editingPlaylist) {
         setName(editingPlaylist.name || '');
         setDescription(editingPlaylist.description || '');
@@ -41,7 +39,6 @@ export default function PlaylistModal({ isOpen, onClose, editingPlaylist, onSave
       }
       setErrorMsg(null);
     }
-    prevIsOpenRef.current = isOpen;
   }, [isOpen, editingPlaylist]);
 
   if (!isOpen) return null;

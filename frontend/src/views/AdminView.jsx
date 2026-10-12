@@ -11,6 +11,7 @@ import ScheduleModal from '../components/ScheduleModal.jsx';
 import PlaylistModal from '../components/PlaylistModal.jsx';
 import BackupManager from '../components/BackupManager.jsx';
 import LoginPage from '../components/LoginPage.jsx';
+import StreamEndpointsCard from '../components/StreamEndpointsCard.jsx';
 import { Github, LayoutDashboard, Calendar, FolderArchive } from 'lucide-react';
 import { setToken, getToken } from '../utils/api.js';
 
@@ -206,6 +207,8 @@ export default function AdminView({
               onRequestLogin={() => setIsLoginOpen(true)}
               showToast={showToast}
             />
+
+            <StreamEndpointsCard showToast={showToast} />
 
             <PlaylistManager
               refreshTrigger={playlistRefreshKey}
