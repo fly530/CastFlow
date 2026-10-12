@@ -103,14 +103,50 @@ router.post('/auth/change-password', requireAuth, async (req, res) => {
 // ==============================================================================
 
 /**
- * 廣播系統即時狀態 (支援標準 /status 與自訂 /nowplaying/coolradio 端點)
+ * 廣播系統即時狀態 (內部格式，供前端面板使用)
  */
-router.get(['/status', '/nowplaying/coolradio'], async (req, res) => {
+router.get('/status', async (req, res) => {
   try {
     const status = await getRadioStatus();
     res.json({ success: true, data: status });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * AzuraCast 相容格式端點，供外部整合使用
+ * 格式：now_playing.song.title / .artist / .art
+ */
+router.get('/nowplaying/coolradio', async (req, res) => {
+  try {
+    const status = await getRadioStatus();
+    const track = status.currentTrack || {};
+
+    // 封面圖片 URL：使用現有的 /api/current/cover 端點
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const artUrl = `${baseUrl}/api/current/cover?title=${encodeURIComponent(track.title || '')}`;
+
+    res.json({
+      now_playing: {
+        song: {
+          title: track.title || '',
+          artist: track.artist || '',
+          album: track.album || '',
+          art: artUrl
+        },
+        elapsed: track.elapsed || 0,
+        remaining: track.remaining || 0,
+        duration: track.duration || 0
+      },
+      listeners: {
+        current: status.icecast?.listeners || 0,
+        unique: status.icecast?.listeners || 0
+      },
+      is_online: status.online || false
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
