@@ -370,13 +370,14 @@ export default function AdminView({
           setIsScheduleModalOpen(false);
           setEditingSchedule(null);
         }}
-        schedule={editingSchedule}
+        editingSchedule={editingSchedule}
         playlists={status?.playlistsSummary || []}
-        onSuccess={() => {
-          showToast('排程規則已更新');
+        onSaved={(msg) => {
+          showToast(msg || '排程規則已更新');
           setScheduleRefreshKey((k) => k + 1);
           fetchStatus();
         }}
+        onRequestLogin={() => setIsLoginOpen(true)}
       />
 
       {/* 歌單資料夾彈跳編輯窗 */}
