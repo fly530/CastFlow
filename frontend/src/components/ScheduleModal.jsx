@@ -31,58 +31,57 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
-  const prevIsOpenRef = useRef(false);
 
   useEffect(() => {
-    // 僅在彈出視窗從關閉切換至開啟，或切換編輯不同項目時進行資料初始化
-    if (isOpen && !prevIsOpenRef.current) {
-      if (editingSchedule) {
-        setTitle(editingSchedule.title || '');
-        setPlaylistId(editingSchedule.playlist_id || (playlists[0]?.id ?? 'A'));
-        setScheduleType(editingSchedule.schedule_type || 'continuous');
-        setDaysOfWeek((editingSchedule.days_of_week || '0,1,2,3,4,5,6').split(','));
-        setIsAllDay(Boolean(editingSchedule.is_all_day));
-        setStartTime(editingSchedule.start_time ? editingSchedule.start_time.substring(0, 5) : '08:00');
-        setEndTime(editingSchedule.end_time ? editingSchedule.end_time.substring(0, 5) : '22:00');
-        setTargetTime(editingSchedule.target_time || '21:30:00');
-        if (editingSchedule.schedule_type === 'hourly') {
-          const rawMin = (editingSchedule.target_time || '00').toString().replace(':', '').trim();
-          setHourlyMinute(parseInt(rawMin, 10) || 0);
-        } else {
-          setHourlyMinute(0);
-        }
-        setTargetDate(editingSchedule.target_date || '');
-        setInterruptMode(editingSchedule.interrupt_mode || 'wait_track_end');
-        setWeight(editingSchedule.weight || 1);
-        setIntervalEveryTracks(editingSchedule.interval_every_tracks || 4);
-        setIntervalPlayTracks(editingSchedule.interval_play_tracks || 1);
-        setPriority(editingSchedule.priority || 0);
+    // 每次 Modal 開啟或切換編輯對象時，重新初始化表單資料
+    if (!isOpen) return;
+    if (editingSchedule) {
+      setTitle(editingSchedule.title || '');
+      setPlaylistId(editingSchedule.playlist_id || (playlists[0]?.id ?? 'A'));
+      setScheduleType(editingSchedule.schedule_type || 'continuous');
+      setDaysOfWeek((editingSchedule.days_of_week || '0,1,2,3,4,5,6').split(','));
+      setIsAllDay(Boolean(editingSchedule.is_all_day));
+      setStartTime(editingSchedule.start_time ? editingSchedule.start_time.substring(0, 5) : '08:00');
+      setEndTime(editingSchedule.end_time ? editingSchedule.end_time.substring(0, 5) : '22:00');
+      setTargetTime(editingSchedule.target_time || '21:30:00');
+      if (editingSchedule.schedule_type === 'hourly') {
+        const rawMin = (editingSchedule.target_time || '00').toString().replace(':', '').trim();
+        setHourlyMinute(parseInt(rawMin, 10) || 0);
       } else {
-        const defaultPl = playlists[0];
-        const initialPlId = defaultPl?.id ?? 'A';
-        const initialTitle = defaultPl?.name || '';
-        setTitle(initialTitle);
-        setPlaylistId(initialPlId);
-        setScheduleType('continuous');
-        setDaysOfWeek(['0', '1', '2', '3', '4', '5', '6']);
-        setIsAllDay(true);
-        setStartTime('08:00');
-        setEndTime('22:00');
-        setTargetTime('21:30:00');
         setHourlyMinute(0);
-        setTargetDate('');
-        setInterruptMode('wait_track_end');
-        setWeight(1);
-        setIntervalEveryTracks(4);
-        setIntervalPlayTracks(1);
-        setPriority(0);
       }
-      setErrorMsg(null);
+      setTargetDate(editingSchedule.target_date || '');
+      setInterruptMode(editingSchedule.interrupt_mode || 'wait_track_end');
+      setWeight(editingSchedule.weight || 1);
+      setIntervalEveryTracks(editingSchedule.interval_every_tracks || 4);
+      setIntervalPlayTracks(editingSchedule.interval_play_tracks || 1);
+      setPriority(editingSchedule.priority || 0);
+    } else {
+      const defaultPl = playlists[0];
+      const initialPlId = defaultPl?.id ?? 'A';
+      const initialTitle = defaultPl?.name || '';
+      setTitle(initialTitle);
+      setPlaylistId(initialPlId);
+      setScheduleType('continuous');
+      setDaysOfWeek(['0', '1', '2', '3', '4', '5', '6']);
+      setIsAllDay(true);
+      setStartTime('08:00');
+      setEndTime('22:00');
+      setTargetTime('21:30:00');
+      setHourlyMinute(0);
+      setTargetDate('');
+      setInterruptMode('wait_track_end');
+      setWeight(1);
+      setIntervalEveryTracks(4);
+      setIntervalPlayTracks(1);
+      setPriority(0);
     }
-    prevIsOpenRef.current = isOpen;
-  }, [isOpen, editingSchedule, playlists]);
+    setErrorMsg(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, editingSchedule?.id]);
 
   if (!isOpen) return null;
+
 
   const handlePlaylistChange = (e) => {
     const newId = e.target.value;
