@@ -36,6 +36,16 @@ services:
     restart: unless-stopped
     expose:
       - "8000"
+    # Icecast 對 MP3 掛載點預設以 ISO-8859-1 處理歌名，中文會整個變成 *（/stream 的
+    # StreamTitle 與 status-json 都是）。映像的 entrypoint 沒有對應的環境變數，所以啟動時
+    # 替所有掛載點補上 UTF-8。/etc 不是 icecast 使用者可寫的，sed -i 會失敗，因此輸出到
+    # /tmp 再讓 icecast 讀那份；entrypoint 會先把密碼寫進 /etc/icecast.xml，順序不受影響。
+    command:
+      - sh
+      - -c
+      - >-
+        sed 's|<fileserve>|<mount type="default"><charset>UTF-8</charset></mount><fileserve>|'
+        /etc/icecast.xml > /tmp/icecast.xml && exec icecast -c /tmp/icecast.xml
     environment:
       # libretime/icecast 只認 ICECAST_SOURCE_PASSWORD / ICECAST_RELAY_PASSWORD /
       # ICECAST_ADMIN_PASSWORD 等變數；ICECAST_PASSWORD 會被無聲丟棄。
