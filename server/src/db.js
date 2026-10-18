@@ -86,6 +86,16 @@ export function initDatabase() {
     );
   `);
 
+  // 定時規則「最近一次已執行」的紀錄。伺服器重啟後據此避免同一時間點重播，
+  // 也讓補播機制 (錯過整點的 1~2 分鐘內補上) 不會變成重複播放。
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS schedule_runs (
+      schedule_id INTEGER PRIMARY KEY,
+      run_key TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
   // 自動確保預設歌單資料夾 (A ~ G) 存在於 MUSIC_DIR
   const musicBaseDir = process.env.MUSIC_DIR || path.resolve(process.cwd(), '../music');
   ['A', 'B', 'C', 'D', 'E', 'F', 'G'].forEach((f) => {
@@ -341,6 +351,18 @@ export function getAllSchedules() {
     JOIN playlists p ON s.playlist_id = p.id
     ORDER BY s.priority DESC, s.id ASC
   `).all();
+}
+
+export function getScheduleRunKey(scheduleId) {
+  const row = getDatabase().prepare('SELECT run_key FROM schedule_runs WHERE schedule_id = ?').get(scheduleId);
+  return row ? row.run_key : null;
+}
+
+export function setScheduleRunKey(scheduleId, runKey) {
+  getDatabase().prepare(`
+    INSERT INTO schedule_runs (schedule_id, run_key, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(schedule_id) DO UPDATE SET run_key = excluded.run_key, updated_at = CURRENT_TIMESTAMP
+  `).run(scheduleId, runKey);
 }
 
 export function getScheduleById(id) {
