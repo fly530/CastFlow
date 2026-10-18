@@ -276,6 +276,14 @@ export async function pushTrackToLiquidsoap(trackPathOrDecision, interruptMode =
     const trackPath = isDecisionObj ? trackPathOrDecision.track.fullPath : trackPathOrDecision;
     const filename = isDecisionObj ? trackPathOrDecision.track.filename : path.basename(trackPath);
 
+    // flush_and_skip 會清空整個佇列，必須在 push 之前執行，
+    // 否則剛推入的插播曲目也會一起被清掉 (佇列變空 → 退回 A 歌單隨機輪播)
+    if (interruptMode === 'immediate_fade') {
+      await sendTelnetCommand('dynamic_queue.flush_and_skip');
+      plannedQueue = [];
+      console.log(`[Scheduler] Triggered immediate fade skip.`);
+    }
+
     const pushCmd = `dynamic_queue.push ${trackPath}`;
     const pushRes = await sendTelnetCommand(pushCmd);
     const rid = pushRes.replace(/END/g, '').trim();
@@ -305,12 +313,6 @@ export async function pushTrackToLiquidsoap(trackPathOrDecision, interruptMode =
     };
 
     plannedQueue.push(queuedItem);
-
-    if (interruptMode === 'immediate_fade') {
-      // 即時強制切入 (淡出當前曲目)
-      await sendTelnetCommand('dynamic_queue.flush_and_skip');
-      console.log(`[Scheduler] Triggered immediate fade skip.`);
-    }
 
     return rid;
   } catch (err) {
