@@ -244,21 +244,15 @@ export function updateUserPassword(username, newPasswordHash) {
 }
 
 /**
- * 記錄曲目播放歷史 (避免連續重複寫入同一首)
+ * 記錄一筆曲目播放歷史。
+ *
+ * 這裡不做去重：「這首歌是否已經記過」要由呼叫端判斷 (scheduler 依 Liquidsoap 的
+ * request id)。若在這裡依標題去重，同一首歌連播兩次 (例如單曲歌單) 只會留下一筆。
  */
-let lastRecordedTitle = null;
-
 export function recordTrackHistory(track) {
   if (!track || !track.title || track.title === 'CastFlow Station' || track.title === 'CastFlow Live' || track.title === 'KubeRadio Station' || track.title === 'KubeRadio Live') {
     return;
   }
-
-  // 避免同一首歌重複紀錄
-  const trackKey = `${track.title}::${track.artist}`;
-  if (lastRecordedTitle === trackKey) {
-    return;
-  }
-  lastRecordedTitle = trackKey;
 
   const database = getDatabase();
   const stmt = database.prepare(`
@@ -271,6 +265,18 @@ export function recordTrackHistory(track) {
     track.album || '',
     track.playlist || 'A'
   );
+}
+
+/**
+ * 刪除超過保留天數的播放歷史，回傳刪除筆數。
+ * 歷史只用來在後台查看「最近播了什麼」，不是長期報表。
+ */
+export function pruneTrackHistory(days = 7) {
+  const keepDays = Math.max(1, Math.floor(Number(days)) || 7);
+  const info = getDatabase()
+    .prepare(`DELETE FROM play_history WHERE played_at < datetime('now', ?)`)
+    .run(`-${keepDays} days`);
+  return info.changes;
 }
 
 /**

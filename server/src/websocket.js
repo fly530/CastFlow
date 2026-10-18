@@ -1,6 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { getRadioStatus } from './scheduler.js';
-import { recordTrackHistory } from './db.js';
 
 let wss = null;
 let lastBroadcastState = null;
@@ -73,10 +72,7 @@ function startRealtimeBroadcastLoop() {
       const currentStatus = await getRadioStatus();
       const currentTrack = currentStatus.currentTrack;
 
-      // 當曲目有變化時，自動記錄進 SQLite 播放歷史
-      if (currentTrack && currentTrack.title) {
-        recordTrackHistory(currentTrack);
-      }
+      // 播放歷史由 scheduler 的 AutoDJ 巡檢記錄 (不依賴有沒有人連著)，這裡只負責推播
 
       // 比對曲目標題、聽眾數或連線狀態是否異動
       const stateHash = `${currentTrack?.title}::${currentTrack?.remaining}::${currentStatus?.icecast?.listeners}::${currentStatus?.online}`;
