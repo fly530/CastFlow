@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Radio, Music, Share2, Copy, Check, ExternalLink, Activity } from 'lucide-react';
+import { Radio, Music, Share2, Copy, Check, ExternalLink, Activity, Download } from 'lucide-react';
 
 export default function StreamEndpointsCard({ showToast }) {
   const [copiedKey, setCopiedKey] = useState(null);
@@ -15,6 +15,7 @@ export default function StreamEndpointsCard({ showToast }) {
       url: `${origin}/stream`,
       badge: 'Icecast MP3',
       hint: '給 AIMP、VLC、foobar2000、ESP32 等播放器使用，串流內含歌名',
+      downloadable: true,
       Icon: Music,
       iconClass: 'text-emerald-400',
       labelClass: 'text-emerald-300 bg-emerald-950/40 border-emerald-800/40',
@@ -58,6 +59,23 @@ export default function StreamEndpointsCard({ showToast }) {
     }
   };
 
+  // 產生 .m3u 播放清單並下載，AIMP / VLC / foobar2000 可直接開啟播放
+  // 標題刻意用 ASCII，避免播放器對 m3u 編碼判斷不同而出現亂碼
+  const downloadPlaylist = (url, label) => {
+    const content = `#EXTM3U\r\n#EXTINF:-1,CastFlow Radio\r\n${url}\r\n`;
+    const blobUrl = URL.createObjectURL(new Blob([content], { type: 'audio/x-mpegurl' }));
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = 'castflow-radio.m3u';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(blobUrl);
+    if (showToast) {
+      showToast(`已下載 ${label} 播放清單 (castflow-radio.m3u)`);
+    }
+  };
+
   return (
     <div className="rounded-3xl bg-slate-900/60 border border-slate-800/80 p-5 sm:p-6 backdrop-blur-xl shadow-xl transition-all">
       {/* 頂部標題 */}
@@ -84,7 +102,7 @@ export default function StreamEndpointsCard({ showToast }) {
 
       {/* 端點清單 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {endpoints.map(({ key, name, label, url, badge, hint, previewable, Icon, iconClass, labelClass, badgeClass }) => (
+        {endpoints.map(({ key, name, label, url, badge, hint, previewable, downloadable, Icon, iconClass, labelClass, badgeClass }) => (
           <div key={key} className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800/80 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
@@ -113,6 +131,16 @@ export default function StreamEndpointsCard({ showToast }) {
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
+              )}
+              {downloadable && (
+                <button
+                  onClick={() => downloadPlaylist(url, label)}
+                  className="p-1.5 rounded-lg text-xs flex items-center gap-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white transition-all active:scale-95"
+                  title="下載 .m3u 播放清單，可直接用 AIMP 開啟"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="text-[11px] font-sans">下載 .m3u</span>
+                </button>
               )}
               <button
                 onClick={() => copyToClipboard(url, key, label)}
