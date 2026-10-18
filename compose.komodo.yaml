@@ -103,6 +103,8 @@ services:
       start_period: 20s
     environment:
       - PORT=3001
+      # 排程以本地時間比對 fixed_time / hourly，不設 TZ 會是 UTC（差 8 小時）
+      - TZ=${TZ:-Asia/Taipei}
       - JWT_SECRET=${JWT_SECRET:?未設定。請先建立 .env，見本檔開頭}
       - LIQUIDSOAP_HOST=liquidsoap
       - LIQUIDSOAP_PORT=1234
