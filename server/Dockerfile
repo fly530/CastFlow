@@ -2,7 +2,7 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache python3 make g++ zip unzip
+RUN apk add --no-cache python3 make g++ zip unzip tzdata
 
 COPY package*.json ./
 RUN npm ci --omit=dev && apk del python3 make g++
@@ -22,6 +22,8 @@ USER node
 EXPOSE 3001
 
 ENV NODE_ENV=production
+# 排程以本地時間比對 fixed_time / hourly；預設台灣時間，compose 可用 TZ 覆寫
+ENV TZ=Asia/Taipei
 ENV PORT=3001
 ENV LIQUIDSOAP_HOST=liquidsoap
 ENV LIQUIDSOAP_PORT=1234

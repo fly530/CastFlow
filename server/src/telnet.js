@@ -61,6 +61,10 @@ export class LiquidsoapClient extends EventEmitter {
       this.currentCommand.reject(new Error('Connection lost to Liquidsoap'));
       this.currentCommand = null;
     }
+    // 尚未送出的指令也一併拒絕：重連後才執行會變成過期指令 (例如補推早已不需要的曲目)
+    for (const pending of this.commandQueue.splice(0)) {
+      pending.reject(new Error('Connection lost to Liquidsoap'));
+    }
     this.buffer = '';
 
     if (!this.reconnectTimer) {
@@ -99,7 +103,9 @@ export class LiquidsoapClient extends EventEmitter {
       if (this.currentCommand && this.currentCommand.command === command) {
         this.currentCommand = null;
         reject(new Error(`Command timed out: ${command}`));
-        this._processQueue();
+        // 遲到的回應若之後才到，會被誤認成下一個指令的結果 (例如 push 拿到佇列清單當 RID)。
+        // 無法分辨回應歸屬，唯一安全的做法是丟掉這條連線重連，緩衝與佇列一併重置。
+        this.socket?.destroy();
       }
     }, this.timeout);
 
@@ -126,6 +132,11 @@ export class LiquidsoapClient extends EventEmitter {
    */
   sendCommand(command) {
     return new Promise((resolve, reject) => {
+      // 未連線就立刻失敗，不要排隊等重連 (呼叫端都有 catch，且排程在斷線時本來就會停)
+      if (!this.isConnected) {
+        reject(new Error('Not connected to Liquidsoap'));
+        return;
+      }
       this.commandQueue.push({ command, resolve, reject });
       this._processQueue();
     });
