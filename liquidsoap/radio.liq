@@ -49,8 +49,12 @@ faded_stream = crossfade(
   mixed_stream
 )
 
+# 即時音量正規化：把各曲目拉到相近的平均音量 (target 單位為 dB)
+# gain_max 限制最大放大倍率，避免過度放大造成失真；只放在 limiter 之前，由 limiter 擋峰值
+normalized_stream = normalize(target=-14., gain_max=12., faded_stream)
+
 # 透過廣播級 Limiter 限制器防止淡入淡出時雙軌疊加音量超過 0dBFS 導致數位爆音
-limited_radio = limit(threshold=-1.0, attack=20.0, release=150.0, faded_stream)
+limited_radio = limit(threshold=-1.0, attack=20.0, release=150.0, normalized_stream)
 
 # 確保輸出安全（若暫無音樂自動補靜音，防止廣播程序崩潰）
 final_radio = mksafe(limited_radio)
