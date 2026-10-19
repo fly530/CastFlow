@@ -6,7 +6,9 @@ import {
   getScheduleById,
   getPlaylistById,
   getScheduleRunKey,
-  setScheduleRunKey
+  setScheduleRunKey,
+  recordTrackHistory,
+  pruneTrackHistory
 } from './db.js';
 import { sendTelnetCommand, liquidsoap } from './telnet.js';
 import { icecast } from './icecast.js';
@@ -526,6 +528,85 @@ export async function skipCurrentTrack() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 播放歷史：由排程器巡檢記錄，不依賴有沒有人開著頁面 (舊版掛在 WebSocket 迴圈上，
+// 沒有連線時整天都不記錄)。
+// ---------------------------------------------------------------------------
+const HISTORY_RETENTION_DAYS = parseInt(process.env.HISTORY_RETENTION_DAYS || '7', 10) || 7;
+const HISTORY_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+let lastHistoryKey = null;
+let historySeeded = false;
+let isPollingNowPlaying = false;
+let lastPruneAt = 0;
+
+/** 由 Liquidsoap 回報的檔案路徑反查歌單 id；對不到就退回資料夾名稱 */
+function resolveHistoryPlaylist(meta) {
+  const filePath = meta.filename || meta.initial_uri || '';
+  const folderName = path.basename(path.dirname(filePath));
+  const playlist = getAllPlaylists().find((p) => p.folder === folderName);
+  return playlist?.id || folderName || 'A';
+}
+
+/**
+ * 依「目前播出」的 metadata 記錄播放歷史；回傳這次是否新增了一筆。
+ *
+ * 以 Liquidsoap 的 request id (rid) 去重：同一首歌連播兩次 rid 不同，會各記一筆。
+ * 重啟後的第一次只記下 key 不寫入 —— 當時正在播的那首在重啟前已經記過了。
+ */
+export function recordNowPlaying(meta) {
+  if (!meta || !meta.title) return false;
+
+  const key = meta.rid ? `rid:${meta.rid}` : `${meta.title}::${meta.artist || ''}`;
+  if (!historySeeded) {
+    historySeeded = true;
+    lastHistoryKey = key;
+    return false;
+  }
+  if (key === lastHistoryKey) return false;
+  lastHistoryKey = key;
+
+  recordTrackHistory({
+    title: meta.title,
+    artist: meta.artist,
+    album: meta.album,
+    playlist: resolveHistoryPlaylist(meta)
+  });
+  return true;
+}
+
+async function pollNowPlaying() {
+  if (isPollingNowPlaying || !liquidsoap.isConnected) return;
+  isPollingNowPlaying = true;
+  try {
+    recordNowPlaying(await liquidsoap.getMetadata());
+  } catch (err) {
+    logThrottled('history-error', `[Scheduler] 記錄播放歷史失敗: ${err.message}`);
+  } finally {
+    isPollingNowPlaying = false;
+  }
+}
+
+function maybePruneHistory() {
+  const nowMs = Date.now();
+  if (nowMs - lastPruneAt < HISTORY_PRUNE_INTERVAL_MS) return;
+  lastPruneAt = nowMs;
+  try {
+    const removed = pruneTrackHistory(HISTORY_RETENTION_DAYS);
+    if (removed > 0) {
+      console.log(`[Scheduler] 已清除 ${removed} 筆超過 ${HISTORY_RETENTION_DAYS} 天的播放歷史`);
+    }
+  } catch (err) {
+    logThrottled('history-prune', `[Scheduler] 清除舊播放歷史失敗: ${err.message}`);
+  }
+}
+
+async function autoDJTick() {
+  await checkAndFeedQueue();
+  await pollNowPlaying();
+  maybePruneHistory();
+}
+
 /**
  * 啟動 AutoDJ 背景巡檢迴圈 (每 5 秒檢查一次)
  */
@@ -535,9 +616,9 @@ export function startAutoDJScheduler() {
   console.log('[Scheduler] AutoDJ Scheduling Engine started.');
 
   // 初始巡檢
-  setTimeout(checkAndFeedQueue, 2000);
+  setTimeout(autoDJTick, 2000);
 
-  autoDJTimer = setInterval(checkAndFeedQueue, 5000);
+  autoDJTimer = setInterval(autoDJTick, 5000);
 }
 
 export function stopAutoDJScheduler() {
