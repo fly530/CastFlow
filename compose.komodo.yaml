@@ -82,8 +82,9 @@ services:
 
   server:
     # 映像檔由 GitHub Actions 建好推到 GHCR（見 .github/workflows/release.yml），
-    # Komodo 只負責拉取並啟動。latest 是最新一次 main 的建置；要回滾請改成 sha-<短碼> 標籤。
-    image: ghcr.io/fly530/castflow-server:latest
+    # Komodo 只負責拉取並啟動。latest 是最新一次 main 的建置。要回滾不必改這裡：在 Komodo
+    # Stack 的 Environment 加 CASTFLOW_SERVER_TAG=sha-<短碼> 再 Deploy，刪掉那行就回到 latest。
+    image: ghcr.io/fly530/castflow-server:${CASTFLOW_SERVER_TAG:-latest}
     pull_policy: always
     container_name: castflow-server
     restart: unless-stopped
@@ -120,7 +121,8 @@ services:
       - ${CASTFLOW_DATA_DIR:?未設定。請在 .env 設定 CASTFLOW_DATA_DIR}/backups:/backups
 
   gateway:
-    image: ghcr.io/fly530/castflow-gateway:latest
+    # 回滾方式同 server，變數是 CASTFLOW_GATEWAY_TAG。
+    image: ghcr.io/fly530/castflow-gateway:${CASTFLOW_GATEWAY_TAG:-latest}
     pull_policy: always
     container_name: castflow-gateway
     restart: unless-stopped

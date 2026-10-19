@@ -92,6 +92,9 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-server.outputs.tags }}
           labels: ${{ steps.meta-server.outputs.labels }}
+          # 不附 provenance：附了的話一次推送在 GHCR 會變成好幾個版本（含沒有標籤的），
+          # ghcr-cleanup.yml 用的官方 action 分不出來，會把正在用的映像刪壞。
+          provenance: false
 
       - name: Extract metadata for gateway image
         id: meta-gateway
@@ -111,3 +114,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-gateway.outputs.tags }}
           labels: ${{ steps.meta-gateway.outputs.labels }}
+          # 不附 provenance：附了的話一次推送在 GHCR 會變成好幾個版本（含沒有標籤的），
+          # ghcr-cleanup.yml 用的官方 action 分不出來，會把正在用的映像刪壞。
+          provenance: false

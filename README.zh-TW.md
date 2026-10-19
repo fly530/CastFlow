@@ -153,7 +153,9 @@ docker logs castflow-server | grep -E "Password|admin"
 1. 以本 repo 建立 Komodo Stack，**File Paths** 填 `compose.komodo.yaml`。
 2. Stack 的 **Environment** 填 `JWT_SECRET`、`ICECAST_SOURCE_PASSWORD`、`ICECAST_ADMIN_PASSWORD`、`CASTFLOW_HOST`、`CASTFLOW_DATA_DIR`（範本見 `.env.example`）。
 3. GHCR 套件若是私有，Stack 的 Image Registry 設 `ghcr.io`（PAT 只需 `read:packages`）。
-4. 開 **Poll for Updates** + **Auto Update**；要回滾就把映像標籤改成 `sha-<短碼>`。
+4. 開 **Poll for Updates** + **Auto Update**。
+5. 要回滾：在 Stack 的 Environment 加 `CASTFLOW_SERVER_TAG=sha-<短碼>`（gateway 用 `CASTFLOW_GATEWAY_TAG`）再按 Deploy；
+   固定期間 Auto Update 不會更新它，刪掉那行再 Deploy 就回到 `latest`。GHCR 只保留最近 20 份映像（`ghcr-cleanup.yml` 每週清一次）。
 
 ---
 

@@ -1,0 +1,33 @@
+# 每週清掉 GHCR 上太舊的映像，只保留最新的幾份（每份都有 sha-<短碼> 標籤，可用來回滾）。
+#
+# 建置時已關掉 provenance，一次推送＝一個版本；但 2026-10 以前的舊版本是開著 provenance
+# 建的，一次推送佔 3～4 個版本，所以先保留 60 個，避免切到某份映像的一半。
+# 等新格式的版本累積滿 20 份之後，把 min-versions-to-keep 降成 20。
+#
+# latest 永遠指向最新那份，不會被刪。手動 Run workflow 可以立即清一次。
+name: 清理 GHCR 舊映像
+
+on:
+  schedule:
+    - cron: "0 19 * * 0" # UTC 週日 19:00 = 台灣週一 03:00
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 清理 castflow-server
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: castflow-server
+          package-type: container
+          min-versions-to-keep: 60
+      - name: 清理 castflow-gateway
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: castflow-gateway
+          package-type: container
+          min-versions-to-keep: 60
