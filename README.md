@@ -23,7 +23,7 @@ flowchart TD
     end
 
     subgraph Backend [Backend Control & Scheduling]
-        Server["CastFlow Server (Node.js 22)\n(AutoDJ Scheduling, REST API & WebSocket)"]
+        Server["CastFlow Server (Node.js 26)\n(AutoDJ Scheduling, REST API & WebSocket)"]
         SQLite[("Embedded SQLite (WAL Mode)\n/data/radio.db")]
     end
 
