@@ -6,7 +6,7 @@ CastFlow is a self-hosted automated radio station: Liquidsoap mixes audio, Iceca
 
 ## Commands
 
-Backend (`server/`, Node 22, ESM, Express 5):
+Backend (`server/`, Node 26, ESM, Express 5):
 ```bash
 cd server && npm ci
 npm test                                   # node --test test/*.test.js

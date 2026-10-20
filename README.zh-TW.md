@@ -23,7 +23,7 @@ flowchart TD
     end
 
     subgraph Backend [後端排程與控制層]
-        Server["CastFlow Server (Node.js 22)\n(AutoDJ 排程決策、REST API & WebSocket)"]
+        Server["CastFlow Server (Node.js 26)\n(AutoDJ 排程決策、REST API & WebSocket)"]
         SQLite[("內嵌 SQLite (WAL 模式)\n/data/radio.db")]
     end
 
