@@ -164,3 +164,109 @@ describe('hourly 到點與補播窗口', () => {
     assert.equal(scheduler.findDueFixedRule(at(22, 0, 5)), null);
   });
 });
+
+// -----------------------------------------------------------------------------
+// 一般輪播的決策：間隔插播「每 X 首播 Y 首」與歌單播放順序
+// -----------------------------------------------------------------------------
+function makeSongs(folder, names) {
+  const dir = path.join(process.env.MUSIC_DIR, folder);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of names) fs.writeFileSync(path.join(dir, n), '');
+  return dir;
+}
+
+function ensurePlaylist(id, playMode) {
+  if (!db.getPlaylistById(id)) {
+    db.createPlaylist({ id, name: id, folder: id, color: '#000', play_mode: playMode, transition: 'smart' });
+  }
+}
+
+describe('間隔插播 (每 X 首播 Y 首)', () => {
+  test('X 只計一般曲目：固定每 2 首一般曲目後連播 2 首插播，不會越插越密', () => {
+    clearSchedules();
+    scheduler.resetSchedulerState();
+    ensurePlaylist('REG', 'sequential');
+    ensurePlaylist('INS', 'sequential');
+    makeSongs('REG', ['r1.mp3', 'r2.mp3', 'r3.mp3']);
+    makeSongs('INS', ['i1.mp3', 'i2.mp3']);
+    db.createSchedule({ playlist_id: 'REG', title: '一般', schedule_type: 'continuous', is_all_day: true });
+    db.createSchedule({
+      playlist_id: 'INS', title: '插播', schedule_type: 'interval', is_all_day: true,
+      interval_every_tracks: 2, interval_play_tracks: 2
+    });
+
+    const seq = Array.from({ length: 12 }, () => scheduler.decideNextTrack(at(12, 0)).reason);
+    assert.deepEqual(seq, [
+      'continuous', 'continuous', 'interval', 'interval',
+      'continuous', 'continuous', 'interval', 'interval',
+      'continuous', 'continuous', 'interval', 'interval'
+    ]);
+  });
+
+  test('時段外的間隔規則不插播，也不累計', () => {
+    clearSchedules();
+    scheduler.resetSchedulerState();
+    db.createSchedule({ playlist_id: 'REG', title: '一般', schedule_type: 'continuous', is_all_day: true });
+    db.createSchedule({
+      playlist_id: 'INS', title: '夜間插播', schedule_type: 'interval', is_all_day: false,
+      start_time: '22:00', end_time: '23:00', interval_every_tracks: 1, interval_play_tracks: 1
+    });
+    const seq = Array.from({ length: 4 }, () => scheduler.decideNextTrack(at(12, 0)).reason);
+    assert.deepEqual(seq, ['continuous', 'continuous', 'continuous', 'continuous']);
+  });
+
+  test('定時規則不由 decideNextTrack 處理 (走插播佇列)', () => {
+    clearSchedules();
+    scheduler.resetSchedulerState();
+    db.createSchedule({ playlist_id: 'REG', title: '一般', schedule_type: 'continuous', is_all_day: true });
+    makeFixed({ target_time: '12:00:00' });
+    assert.equal(scheduler.decideNextTrack(at(12, 0, 5)).reason, 'continuous');
+  });
+});
+
+describe('歌單播放順序', () => {
+  test('sequential：依檔名排序接續；刪掉下一首也不會重播或卡住', () => {
+    scheduler.resetSchedulerState();
+    const dir = makeSongs('REG', ['01.mp3', '02.mp3', '03.mp3']);
+    const next = () => scheduler.getNextTrackFromPlaylist('REG').filename;
+    assert.equal(next(), '01.mp3');
+    fs.unlinkSync(path.join(dir, '02.mp3'));
+    assert.equal(next(), '03.mp3');
+    assert.equal(next(), '01.mp3');
+  });
+
+  test('shuffle：一輪內每首各播一次，換輪的第一首不與上一首相同', () => {
+    scheduler.resetSchedulerState();
+    ensurePlaylist('SHF', 'shuffle');
+    makeSongs('SHF', ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3']);
+    let last = null;
+    for (let round = 0; round < 30; round++) {
+      const picked = Array.from({ length: 4 }, () => scheduler.getNextTrackFromPlaylist('SHF').filename);
+      assert.deepEqual([...picked].sort(), ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3']);
+      assert.notEqual(picked[0], last, `第 ${round} 輪開頭連播 ${last}`);
+      last = picked[3];
+    }
+  });
+
+  test('shuffle：檔案改名 (數量不變) 後不會推出已不存在的檔案', () => {
+    scheduler.resetSchedulerState();
+    const dir = makeSongs('SHF', ['a.mp3', 'b.mp3', 'c.mp3']);
+    scheduler.getNextTrackFromPlaylist('SHF');
+    fs.renameSync(path.join(dir, 'a.mp3'), path.join(dir, 'z.mp3'));
+    fs.renameSync(path.join(dir, 'b.mp3'), path.join(dir, 'y.mp3'));
+    for (let i = 0; i < 6; i++) {
+      const t = scheduler.getNextTrackFromPlaylist('SHF');
+      assert.ok(fs.existsSync(t.fullPath), `推出不存在的檔案 ${t.filename}`);
+    }
+  });
+
+  test('不安全的 folder：讀取與上傳用同一個資料夾 (退回歌單 id)', async () => {
+    const playlists = await import(`${SRC}/playlists.js`);
+    db.createPlaylist({ id: 'cjk', name: '中文', folder: '中文資料夾', play_mode: 'sequential' });
+    const uploadDir = playlists.getPlaylistDir('cjk');
+    fs.writeFileSync(path.join(uploadDir, 'x.mp3'), '');
+    const t = scheduler.getNextTrackFromPlaylist('cjk');
+    assert.equal(path.dirname(t.fullPath), uploadDir);
+  });
+});

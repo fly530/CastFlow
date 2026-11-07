@@ -3,7 +3,6 @@ import path from 'path';
 import {
   getAllPlaylists,
   getAllSchedules,
-  getScheduleById,
   getPlaylistById,
   getScheduleRunKey,
   setScheduleRunKey,
@@ -13,22 +12,32 @@ import {
 import { sendTelnetCommand, liquidsoap } from './telnet.js';
 import { icecast } from './icecast.js';
 import { getAudioMetadata, findTrackPathByTitle } from './metadata.js';
+import { resolvePlaylistDir, listMp3Files } from './playlists.js';
 
-let tracksPlayedCount = 0;
 const lastExecutedFixedTimes = new Map(); // scheduleId -> 'YYYY-MM-DD HH:MM' (排定時間點，非實際執行時間)
-const playlistShuffleIndices = new Map(); // playlistId -> { list: [], index: 0 }
+const playlistOrderState = new Map(); // playlistId -> 播放順序狀態 (見 getNextTrackFromPlaylist)
+// 間隔插播：每條規則「距上次插播已播了幾首一般曲目」；以及「每 X 首播 Y 首」還沒播完的部分
+const intervalCounters = new Map(); // scheduleId -> 一般曲目數
+let pendingIntervalInsert = null; // { scheduleId, remaining }
 let isAutoDJRunning = false;
 let autoDJTimer = null;
 let currentPlayingTitle = null;
 let currentTrackStartTime = Date.now();
 
-const MUSIC_DIR = process.env.MUSIC_DIR || path.resolve(process.cwd(), '../music');
+// Liquidsoap 的兩條佇列 (radio.liq)：
+//   priority_queue —— 定時插播與手動觸發，當前曲目一結束就優先播出
+//   dynamic_queue  —— 一般輪播，平常預排 TARGET_QUEUE_LENGTH 首
+export const QUEUE = { PRIORITY: 'priority_queue', DYNAMIC: 'dynamic_queue' };
+const TARGET_QUEUE_LENGTH = 3;
+// 立即插播：等插播曲目解析完成才跳歌的上限 (逾時仍會跳，最壞情況是先接一首別的再插播)
+const PRIORITY_READY_TIMEOUT_MS = 3000;
 
 // 定時規則 (fixed_time / hourly) 錯過排定分鐘時的補播窗口：排定時間起算 2 分鐘內仍會補播。
 // 涵蓋 server 重啟、Telnet 暫時斷線等情況；超過窗口就放棄，避免很久以後才突然插播。
 const CATCHUP_MINUTES = 2;
 
 const pad2 = (n) => n.toString().padStart(2, '0');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 相同訊息在 intervalMs 內只印一次 (排程每 5 秒巡檢，直接印會洗版)
 const lastLogAt = new Map();
@@ -58,6 +67,18 @@ function markScheduleRun(scheduleId, runKey) {
   } catch (err) {
     logThrottled('run-key-write', `[Scheduler] 寫入規則執行紀錄失敗 (重啟後可能重播): ${err.message}`);
   }
+}
+
+/**
+ * 清除排程器的記憶體狀態 (播放順序、間隔計數、定時規則快取)。
+ * 等同伺服器重啟後的狀態；測試用來隔離案例。
+ */
+export function resetSchedulerState() {
+  lastExecutedFixedTimes.clear();
+  playlistOrderState.clear();
+  intervalCounters.clear();
+  pendingIntervalInsert = null;
+  plannedQueue = [];
 }
 
 /**
@@ -97,7 +118,6 @@ function getTriggerKey(late, now) {
 
 /**
  * 找出此刻到點、且該時間點尚未執行過的定時規則，並取出要播的曲目 (不標記已執行)。
- * checkAndFeedQueue 與 decideNextTrack 共用，避免兩處判斷邏輯分岔。
  */
 export function findDueFixedRule(now = new Date()) {
   const prioritySchedules = getAllSchedules()
@@ -123,67 +143,71 @@ export function findDueFixedRule(now = new Date()) {
 }
 
 /**
- * 取得指定歌單目錄下的所有 MP3 檔案清單
+ * 取得歌單資料夾下的所有 MP3 檔案清單。可傳歌單 id 或資料庫列。
+ * 路徑一律經過 playlists.js 的 resolvePlaylistDir (與上傳、刪除同一個資料夾)；
+ * 純讀取，資料夾不存在就回傳空陣列，不會建立目錄。
  */
-export function getPlaylistTracksFromDisk(folderName) {
-  const dir = path.join(MUSIC_DIR, folderName);
-  if (!fs.existsSync(dir)) {
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-    } catch {
-      return [];
-    }
-  }
-
-  try {
-    const files = fs.readdirSync(dir);
-    return files
-      .filter((f) => f.toLowerCase().endsWith('.mp3') && !f.startsWith('.'))
-      .map((f) => ({
-        filename: f,
-        fullPath: path.join(dir, f),
-        relativePath: `${folderName}/${f}`
-      }));
-  } catch (e) {
-    console.error(`[Scheduler] Failed to read dir ${dir}:`, e.message);
-    return [];
-  }
+export function getPlaylistTracksFromDisk(playlistOrId) {
+  const dir = resolvePlaylistDir(playlistOrId);
+  const folderName = path.basename(dir);
+  return listMp3Files(playlistOrId).map((f) => ({
+    filename: f,
+    fullPath: path.join(dir, f),
+    relativePath: `${folderName}/${f}`
+  }));
 }
 
+function shuffleInPlace(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+const compareFilenames = (a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true });
+
 /**
- * 從指定歌單選取下一首曲目 (支援隨機打亂 Shuffle 與防連續重複)
+ * 從指定歌單選取下一首曲目。
+ *
+ * - sequential：依檔名排序，接在「上一首播的檔名」之後；增刪檔案也能接續，不會跳號或重播。
+ * - shuffle：每輪一次 Fisher-Yates 洗牌；資料夾內容 (不只是數量) 有變就重洗，
+ *   改名或換檔後不會推出已不存在的路徑；新一輪的第一首不會與上一首相同。
  */
 export function getNextTrackFromPlaylist(playlistId) {
   const playlist = getPlaylistById(playlistId);
   if (!playlist) return null;
 
-  const tracks = getPlaylistTracksFromDisk(playlist.folder);
+  const tracks = getPlaylistTracksFromDisk(playlist);
   if (tracks.length === 0) return null;
+  const byName = new Map(tracks.map((t) => [t.filename, t]));
+  const names = [...byName.keys()].sort(compareFilenames);
+  let state = playlistOrderState.get(playlistId);
 
   if (playlist.play_mode === 'sequential') {
-    let state = playlistShuffleIndices.get(playlistId) || { index: 0 };
-    const selected = tracks[state.index % tracks.length];
-    state.index = (state.index + 1) % tracks.length;
-    playlistShuffleIndices.set(playlistId, state);
-    return selected;
+    const last = state?.last;
+    const next = (last && names.find((n) => compareFilenames(n, last) > 0)) || names[0];
+    playlistOrderState.set(playlistId, { mode: 'sequential', last: next });
+    return byName.get(next);
   }
 
-  // 預設隨機打亂 (Shuffle)
-  let state = playlistShuffleIndices.get(playlistId);
-  if (!state || state.list.length !== tracks.length || state.index >= state.list.length) {
-    // 產生新的一輪打亂序列
-    const shuffled = [...tracks].sort(() => Math.random() - 0.5);
-    state = { list: shuffled, index: 0 };
+  const signature = names.join('\n');
+  if (!state || state.mode !== 'shuffle' || state.signature !== signature || state.index >= state.order.length) {
+    const order = shuffleInPlace([...names]);
+    if (order.length > 1 && order[0] === state?.last) {
+      const j = 1 + Math.floor(Math.random() * (order.length - 1));
+      [order[0], order[j]] = [order[j], order[0]];
+    }
+    state = { mode: 'shuffle', signature, order, index: 0, last: state?.last };
   }
 
-  const selected = state.list[state.index];
+  const selected = state.order[state.index];
   state.index += 1;
-  playlistShuffleIndices.set(playlistId, state);
-  return selected;
+  state.last = selected;
+  playlistOrderState.set(playlistId, state);
+  return byName.get(selected);
 }
 
-/**
- * 檢查目前時間與星期是否符合排程要求
 /**
  * 驗證當前時間是否座落於指定的開始與結束時段區間 (支援跨日夜間時段)
  */
@@ -217,7 +241,7 @@ function isScheduleActiveNow(schedule, now = new Date()) {
   }
 
   // 2. 時段檢查
-  if (schedule.schedule_type === 'continuous') {
+  if (schedule.schedule_type === 'continuous' || schedule.schedule_type === 'interval') {
     if (schedule.is_all_day) return true;
     if (!schedule.start_time || !schedule.end_time) return true;
     return isTimeInWindow(schedule.start_time, schedule.end_time, now);
@@ -235,12 +259,6 @@ function isScheduleActiveNow(schedule, now = new Date()) {
     return getMinutesLate(schedule, now) !== null;
   }
 
-  if (schedule.schedule_type === 'interval') {
-    if (schedule.is_all_day) return true;
-    if (!schedule.start_time || !schedule.end_time) return true;
-    return isTimeInWindow(schedule.start_time, schedule.end_time, now);
-  }
-
   if (schedule.schedule_type === 'fixed_time') {
     // 若有指定單次日期
     if (schedule.target_date) {
@@ -255,52 +273,60 @@ function isScheduleActiveNow(schedule, now = new Date()) {
 }
 
 /**
- * 核心決策引擎：依權重、時段、間隔與指定時間計算下一首曲目
+ * 一般輪播 (dynamic_queue) 的下一首：間隔插播 → 加權輪播 → 保底歌單。
+ *
+ * 定時規則 (fixed_time / hourly) 不在這裡處理 —— 它們由 checkAndFeedQueue 推進
+ * priority_queue，才能在當前曲目結束後立刻播出，而不是排在預排的曲目後面。
+ *
+ * 間隔插播「每 X 首播 Y 首」：X 只計一般曲目 (插播本身不算)，到 X 首後連續插播 Y 首。
  */
-export function decideNextTrack() {
-  const now = new Date();
+export function decideNextTrack(now = new Date()) {
   const allSchedules = getAllSchedules();
+  const activeIntervals = allSchedules.filter(
+    (s) => s.schedule_type === 'interval' && s.interval_every_tracks > 0 && isScheduleActiveNow(s, now)
+  );
+  const intervalDecision = (sch, track) => ({
+    track,
+    playlistId: sch.playlist_id,
+    schedule: sch,
+    reason: 'interval',
+    interruptMode: 'wait_track_end'
+  });
 
-  // 1. 優先檢查：精確指定時間 (fixed_time) 與每小時整點/定分插播 (hourly)
-  const due = findDueFixedRule(now);
-  if (due) {
-    markScheduleRun(due.sch.id, due.key);
-    tracksPlayedCount++;
-    return {
-      track: due.track,
-      playlistId: due.sch.playlist_id,
-      schedule: due.sch,
-      reason: due.sch.schedule_type,
-      interruptMode: due.sch.interrupt_mode
-    };
-  }
-
-  // 2. 次要檢查：間隔插播 (interval - 每 X 首播 Y 首)
-  const intervalSchedules = allSchedules.filter((s) => s.schedule_type === 'interval' && s.interval_every_tracks > 0);
-  for (const sch of intervalSchedules) {
-    if (isScheduleActiveNow(sch, now)) {
-      if (tracksPlayedCount > 0 && tracksPlayedCount % sch.interval_every_tracks === 0) {
-        const track = getNextTrackFromPlaylist(sch.playlist_id);
-        if (track) {
-          tracksPlayedCount++;
-          return {
-            track,
-            playlistId: sch.playlist_id,
-            schedule: sch,
-            reason: 'interval',
-            interruptMode: 'wait_track_end'
-          };
-        }
-      }
+  // 1. 「每 X 首播 Y 首」的第 2..Y 首
+  if (pendingIntervalInsert) {
+    const sch = activeIntervals.find((s) => s.id === pendingIntervalInsert.scheduleId);
+    const track = sch ? getNextTrackFromPlaylist(sch.playlist_id) : null;
+    if (track) {
+      pendingIntervalInsert.remaining -= 1;
+      if (pendingIntervalInsert.remaining <= 0) pendingIntervalInsert = null;
+      return intervalDecision(sch, track);
     }
+    pendingIntervalInsert = null; // 規則停用、離開時段或歌單空了：放棄剩下的插播
   }
+
+  // 2. 間隔規則到點
+  for (const sch of activeIntervals) {
+    if ((intervalCounters.get(sch.id) || 0) < sch.interval_every_tracks) continue;
+    const track = getNextTrackFromPlaylist(sch.playlist_id);
+    if (!track) continue;
+    intervalCounters.set(sch.id, 0);
+    const playTracks = Math.max(1, Number(sch.interval_play_tracks) || 1);
+    pendingIntervalInsert = playTracks > 1 ? { scheduleId: sch.id, remaining: playTracks - 1 } : null;
+    return intervalDecision(sch, track);
+  }
+
+  const countRegularTrack = () => {
+    for (const sch of activeIntervals) {
+      intervalCounters.set(sch.id, (intervalCounters.get(sch.id) || 0) + 1);
+    }
+  };
 
   // 3. 常規輪播：依輪播權重 (Weights) 進行加權隨機抽選
   const activeContinuous = allSchedules.filter((s) => s.schedule_type === 'continuous' && isScheduleActiveNow(s, now));
 
   if (activeContinuous.length > 0) {
-    // 計算總權重池
-    const totalWeight = activeContinuous.reduce((sum, s) => sum + (Math.max(1, s.weight || 1)), 0);
+    const totalWeight = activeContinuous.reduce((sum, s) => sum + Math.max(1, s.weight || 1), 0);
     let randomNum = Math.random() * totalWeight;
 
     let selectedSchedule = activeContinuous[0];
@@ -315,7 +341,7 @@ export function decideNextTrack() {
 
     const track = getNextTrackFromPlaylist(selectedSchedule.playlist_id);
     if (track) {
-      tracksPlayedCount++;
+      countRegularTrack();
       return {
         track,
         playlistId: selectedSchedule.playlist_id,
@@ -326,12 +352,12 @@ export function decideNextTrack() {
     }
   }
 
-  // 4. 若皆無符合，隨機自 A 歌單或第一個有檔案的歌單保底
+  // 4. 若皆無符合，自第一個有檔案的啟用歌單保底
   const allPlaylists = getAllPlaylists().filter((p) => p.is_active);
   for (const pl of allPlaylists) {
     const track = getNextTrackFromPlaylist(pl.id);
     if (track) {
-      tracksPlayedCount++;
+      countRegularTrack();
       return {
         track,
         playlistId: pl.id,
@@ -345,55 +371,122 @@ export function decideNextTrack() {
   return null;
 }
 
-// 實時保存已推送到 Liquidsoap dynamic_queue 的真實待播曲目 (保證穩定不跳動)
+// 已推送到 Liquidsoap 兩條佇列、尚未播出的曲目 (每項帶 queue 欄位)。
+// 排列順序 = 預計播出順序：priority_queue 的在前。
 let plannedQueue = [];
 
+// 只取數字 RID：佇列不存在時 Liquidsoap 回 "ERROR: unknown command ..."，不能當成 RID
+function parseRids(output) {
+  return output.replace(/END/g, '').trim().split(/\s+/).filter((r) => /^\d+$/.test(r));
+}
+
+const isUnknownCommand = (res) => /unknown command/i.test(res);
+
+function upsertPlanned(item) {
+  plannedQueue = plannedQueue.filter((i) => i.rid !== item.rid);
+  plannedQueue.push(item);
+  plannedQueue.sort((a, b) => (a.queue === b.queue ? 0 : a.queue === QUEUE.PRIORITY ? -1 : 1));
+}
+
+async function buildQueuedItem({ rid, queue, fullPath, playlistId, ruleTitle, scheduleType }) {
+  const filename = path.basename(fullPath);
+  const meta = await getAudioMetadata(fullPath).catch(() => null);
+  const folderName = path.basename(path.dirname(fullPath));
+  const playlist = playlistId
+    ? getPlaylistById(playlistId)
+    : getAllPlaylists().find((p) => path.basename(resolvePlaylistDir(p)) === folderName);
+  return {
+    rid,
+    queue,
+    filename,
+    fullPath,
+    title: meta?.title || filename.replace(/\.mp3$/i, ''),
+    artist: meta?.artist || 'Unknown Artist',
+    duration: meta?.duration || 0,
+    playlistId: playlist?.id || 'A',
+    playlistName: playlist?.name || '智慧歌單',
+    playlistColor: playlist?.color || '#6366f1',
+    ruleTitle,
+    scheduleType
+  };
+}
+
 /**
- * 透過 Telnet 將曲目推送至 Liquidsoap dynamic_queue 並登記至 plannedQueue
+ * 等插播佇列的第一首解析完成 (立即插播在跳歌前呼叫)；逾時回傳 false。
  */
-export async function pushTrackToLiquidsoap(trackPathOrDecision, interruptMode = 'wait_track_end') {
+async function waitForPriorityReady(timeoutMs = PRIORITY_READY_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if ((await sendTelnetCommand('radio.priority_ready')).trim() === 'true') return true;
+    } catch {
+      return false;
+    }
+    await sleep(100);
+  }
+  return false;
+}
+
+/**
+ * 推送曲目到 Liquidsoap 佇列並登記到 plannedQueue；回傳 RID，失敗回傳 null。
+ *
+ * @param trackPathOrDecision decideNextTrack 的結果，或檔案完整路徑 (手動插播)
+ * @param interruptMode 'immediate_fade' 會在插播曲目就緒後跳過目前曲目 (待播佇列保留)
+ * @param options.queue QUEUE.DYNAMIC (一般輪播) 或 QUEUE.PRIORITY (插播)；
+ *                      未指定時，立即插播走 priority_queue，其餘走 dynamic_queue
+ */
+export async function pushTrackToLiquidsoap(trackPathOrDecision, interruptMode = 'wait_track_end', options = {}) {
   try {
     const isDecisionObj = typeof trackPathOrDecision === 'object' && trackPathOrDecision.track;
     const trackPath = isDecisionObj ? trackPathOrDecision.track.fullPath : trackPathOrDecision;
-    const filename = isDecisionObj ? trackPathOrDecision.track.filename : path.basename(trackPath);
+    const immediate = interruptMode === 'immediate_fade';
+    let queue = options.queue || (immediate ? QUEUE.PRIORITY : QUEUE.DYNAMIC);
+    let legacyImmediate = false;
 
-    // flush_and_skip 會清空整個佇列，必須在 push 之前執行，
-    // 否則剛推入的插播曲目也會一起被清掉 (佇列變空 → 退回 A 歌單隨機輪播)
-    if (interruptMode === 'immediate_fade') {
-      await sendTelnetCommand('dynamic_queue.flush_and_skip');
-      plannedQueue = [];
-      console.log(`[Scheduler] Triggered immediate fade skip.`);
+    let pushRes = await sendTelnetCommand(`${queue}.push ${trackPath}`);
+    if (queue === QUEUE.PRIORITY && isUnknownCommand(pushRes)) {
+      // Liquidsoap 還在跑舊版 radio.liq (沒有 priority_queue)：compose 更新 server 映像時
+      // 不會重啟 liquidsoap。退回舊做法 —— 插播排進 dynamic_queue，立即模式先清空再推。
+      logThrottled(
+        'no-priority-queue',
+        '[Scheduler] Liquidsoap 沒有 priority_queue (radio.liq 未更新或未重啟)，插播退回 dynamic_queue，會排在預排曲目之後。請重啟 liquidsoap 容器。',
+        10 * 60 * 1000
+      );
+      queue = QUEUE.DYNAMIC;
+      if (immediate) {
+        await sendTelnetCommand(`${QUEUE.DYNAMIC}.flush_and_skip`);
+        plannedQueue = plannedQueue.filter((i) => i.queue !== QUEUE.DYNAMIC);
+        legacyImmediate = true;
+      }
+      pushRes = await sendTelnetCommand(`${queue}.push ${trackPath}`);
     }
-
-    const pushCmd = `dynamic_queue.push ${trackPath}`;
-    const pushRes = await sendTelnetCommand(pushCmd);
     const rid = pushRes.replace(/END/g, '').trim();
-    console.log(`[Scheduler] Pushed track: ${trackPath} -> RID ${rid}`);
+    if (!/^\d+$/.test(rid)) {
+      throw new Error(`Liquidsoap 回應非預期: ${rid}`);
+    }
+    console.log(`[Scheduler] Pushed track to ${queue}: ${trackPath} -> RID ${rid}`);
 
-    const meta = await getAudioMetadata(trackPath).catch(() => null);
-    const folderName = path.basename(path.dirname(trackPath));
-    const allPlaylists = getAllPlaylists();
-    const playlist = isDecisionObj
-      ? getPlaylistById(trackPathOrDecision.playlistId)
-      : allPlaylists.find((p) => p.folder === folderName);
+    upsertPlanned(
+      await buildQueuedItem({
+        rid,
+        queue,
+        fullPath: trackPath,
+        playlistId: isDecisionObj ? trackPathOrDecision.playlistId : null,
+        ruleTitle: isDecisionObj
+          ? trackPathOrDecision.schedule?.title || (trackPathOrDecision.reason === 'interval' ? '間隔插播' : '智慧輪播')
+          : options.ruleTitle || '手動插播',
+        scheduleType: isDecisionObj ? trackPathOrDecision.reason : 'manual'
+      })
+    );
 
-    const queuedItem = {
-      rid,
-      filename,
-      fullPath: trackPath,
-      title: meta?.title || filename.replace(/\.mp3$/i, ''),
-      artist: meta?.artist || 'Unknown Artist',
-      duration: meta?.duration || 0,
-      playlistId: playlist?.id || 'A',
-      playlistName: playlist?.name || '智慧歌單',
-      playlistColor: playlist?.color || '#6366f1',
-      ruleTitle: isDecisionObj
-        ? trackPathOrDecision.schedule?.title || (trackPathOrDecision.reason === 'interval' ? '間隔插播' : '智慧輪播')
-        : '手動插播',
-      scheduleType: isDecisionObj ? trackPathOrDecision.reason : 'manual'
-    };
-
-    plannedQueue.push(queuedItem);
+    if (immediate && !legacyImmediate) {
+      const ready = await waitForPriorityReady();
+      if (!ready) {
+        console.warn('[Scheduler] 插播曲目逾時仍未就緒，照常跳歌');
+      }
+      await sendTelnetCommand('radio.skip');
+      console.log('[Scheduler] Triggered immediate fade skip.');
+    }
 
     return rid;
   } catch (err) {
@@ -403,7 +496,7 @@ export async function pushTrackToLiquidsoap(trackPathOrDecision, interruptMode =
 }
 
 /**
- * 檢查並自動填充 Liquidsoap 的動態佇列 (精確維持 3 首待播曲目)
+ * 檢查並自動填充 Liquidsoap 的佇列 (定時插播進 priority_queue；dynamic_queue 維持 3 首待播)
  *
  * 5 秒巡檢、狀態 API (getUpcomingTracks)、skip 後的補隊列都會呼叫這裡；
  * 若上一輪還沒跑完 (Telnet 指令最長等 5 秒) 就直接略過，避免兩輪同時讀到
@@ -420,62 +513,66 @@ export async function checkAndFeedQueue() {
   }
 }
 
-async function feedQueueOnce() {
-  try {
-    // 查詢當前佇列長度 (以空格解析 RID 陣列)
-    const queueOutput = await sendTelnetCommand('dynamic_queue.queue');
-    const currentRids = queueOutput.replace(/END/g, '').trim().split(/\s+/).filter(Boolean);
+/**
+ * 讓 plannedQueue 與 Liquidsoap 實際佇列一致：移除已播出的，
+ * 補回不認得的 RID (例如伺服器重啟後) —— 向 Liquidsoap 查回檔案路徑與元資料。
+ * 回傳各佇列目前的 RID。
+ */
+async function syncPlannedQueue() {
+  const rids = {};
+  for (const queue of [QUEUE.PRIORITY, QUEUE.DYNAMIC]) {
+    rids[queue] = parseRids(await sendTelnetCommand(`${queue}.queue`));
+  }
+  const alive = new Set([...rids[QUEUE.PRIORITY], ...rids[QUEUE.DYNAMIC]]);
+  plannedQueue = plannedQueue.filter((item) => alive.has(item.rid));
 
-    // 同步 plannedQueue：僅保留仍在 Liquidsoap 待播佇列中的項目
-    plannedQueue = plannedQueue.filter((item) => currentRids.includes(item.rid));
-
-    // 若 plannedQueue 缺少某些已在 Liquidsoap 待播中的 RID (例如伺服器重啟時)，主動向 Liquidsoap 查回元資料補全
-    for (const rid of currentRids) {
-      if (!plannedQueue.some((item) => item.rid === rid)) {
-        try {
-          const metaRes = await sendTelnetCommand(`request.metadata ${rid}`);
-          const fileMatch = metaRes.match(/filename="([^"]+)"/) || metaRes.match(/initial_uri="([^"]+)"/);
-          if (fileMatch) {
-            const fullPath = fileMatch[1];
-            const filename = path.basename(fullPath);
-            const meta = await getAudioMetadata(fullPath).catch(() => null);
-            const folderName = path.basename(path.dirname(fullPath));
-            const allPlaylists = getAllPlaylists();
-            const playlist = allPlaylists.find((p) => p.folder === folderName);
-            plannedQueue.push({
+  for (const queue of [QUEUE.PRIORITY, QUEUE.DYNAMIC]) {
+    for (const rid of rids[queue]) {
+      if (plannedQueue.some((item) => item.rid === rid)) continue;
+      try {
+        const metaRes = await sendTelnetCommand(`request.metadata ${rid}`);
+        const fileMatch = metaRes.match(/filename="([^"]+)"/) || metaRes.match(/initial_uri="([^"]+)"/);
+        if (fileMatch) {
+          upsertPlanned(
+            await buildQueuedItem({
               rid,
-              filename,
-              fullPath,
-              title: meta?.title || filename.replace(/\.mp3$/i, ''),
-              artist: meta?.artist || 'Unknown Artist',
-              duration: meta?.duration || 0,
-              playlistId: playlist?.id || 'A',
-              playlistName: playlist?.name || '智慧歌單',
-              playlistColor: playlist?.color || '#6366f1',
-              ruleTitle: '排程佇列',
+              queue,
+              fullPath: fileMatch[1],
+              playlistId: null,
+              ruleTitle: queue === QUEUE.PRIORITY ? '插播佇列' : '排程佇列',
               scheduleType: 'queued'
-            });
-          }
-        } catch {
-          // 忽略
+            })
+          );
         }
+      } catch {
+        // 忽略
       }
     }
+  }
+  return rids;
+}
+
+async function feedQueueOnce() {
+  try {
+    const rids = await syncPlannedQueue();
 
     // 優先檢查是否有到點定時插播 (fixed_time 或 hourly)；錯過排定分鐘時會在補播窗口內補上
     const due = findDueFixedRule(new Date());
     if (due) {
-      const rid = await pushTrackToLiquidsoap({
-        track: due.track,
-        playlistId: due.sch.playlist_id,
-        schedule: due.sch,
-        reason: due.sch.schedule_type
-      }, due.sch.interrupt_mode);
+      const rid = await pushTrackToLiquidsoap(
+        {
+          track: due.track,
+          playlistId: due.sch.playlist_id,
+          schedule: due.sch,
+          reason: due.sch.schedule_type
+        },
+        due.sch.interrupt_mode,
+        { queue: QUEUE.PRIORITY }
+      );
 
       if (rid) {
         // 推送成功才標記已執行；失敗則留在補播窗口內，下一輪巡檢重試
         markScheduleRun(due.sch.id, due.key);
-        tracksPlayedCount++;
         console.log(`[Scheduler] 觸發定時規則「${due.sch.title}」(${due.key}, ${due.sch.interrupt_mode})`);
       } else {
         logThrottled(`push-${due.sch.id}-${due.key}`, `[Scheduler] 定時規則「${due.sch.title}」推送失敗，將於補播窗口內重試`, 10000);
@@ -483,14 +580,15 @@ async function feedQueueOnce() {
       return;
     }
 
-    // 當佇列待播少於 3 首時，才調用決策引擎逐首補充至 3 首
-    // (避免在佇列充裕時無效推進 shuffle 索引與重複計數)
-    while (currentRids.length < 3) {
+    // dynamic_queue 待播少於 3 首時，才調用決策引擎逐首補充
+    // (避免在佇列充裕時無效推進 shuffle 索引與間隔計數)
+    const dynamicRids = rids[QUEUE.DYNAMIC];
+    while (dynamicRids.length < TARGET_QUEUE_LENGTH) {
       const decision = decideNextTrack();
       if (!decision) break;
-      const rid = await pushTrackToLiquidsoap(decision, decision.interruptMode);
+      const rid = await pushTrackToLiquidsoap(decision, 'wait_track_end', { queue: QUEUE.DYNAMIC });
       if (!rid) break;
-      currentRids.push(rid);
+      dynamicRids.push(rid);
     }
   } catch (err) {
     // 不讓例外中斷巡檢迴圈，但要留下紀錄 (Telnet 離線時每分鐘最多印一次)
@@ -499,24 +597,22 @@ async function feedQueueOnce() {
 }
 
 /**
- * 平滑切換至下一首曲目 (無爆音轉場)
+ * 平滑切換至下一首曲目 (無爆音轉場)。
+ * radio.skip 跳的是「目前播出中」的曲目，不論它來自插播、輪播或保底歌單。
  */
 export async function skipCurrentTrack() {
   try {
-    const queueOutput = await sendTelnetCommand('dynamic_queue.queue');
-    const currentRids = queueOutput.replace(/END/g, '').trim().split(/\s+/).filter(Boolean);
-
-    if (currentRids.length === 0) {
+    const queued = parseRids(await sendTelnetCommand(`${QUEUE.DYNAMIC}.queue`));
+    if (queued.length === 0) {
       const decision = decideNextTrack();
       if (decision) {
-        await pushTrackToLiquidsoap(decision);
+        await pushTrackToLiquidsoap(decision, 'wait_track_end', { queue: QUEUE.DYNAMIC });
       }
     }
 
-    // 透過 dynamic_queue.skip 觸發平滑淡出轉場 (絕不直接切斷輸出端)
-    const skipRes = await sendTelnetCommand('dynamic_queue.skip');
+    const skipRes = await sendTelnetCommand('radio.skip');
     currentPlayingTitle = null;
-    console.log(`[Scheduler] Smoothly skipped current track via dynamic_queue: ${skipRes}`);
+    console.log(`[Scheduler] Smoothly skipped current track: ${skipRes}`);
 
     // 切換後立即補足隊列維持 3 首待播
     setTimeout(checkAndFeedQueue, 300);
@@ -544,7 +640,7 @@ let lastPruneAt = 0;
 function resolveHistoryPlaylist(meta) {
   const filePath = meta.filename || meta.initial_uri || '';
   const folderName = path.basename(path.dirname(filePath));
-  const playlist = getAllPlaylists().find((p) => p.folder === folderName);
+  const playlist = getAllPlaylists().find((p) => path.basename(resolvePlaylistDir(p)) === folderName);
   return playlist?.id || folderName || 'A';
 }
 
@@ -638,6 +734,7 @@ export async function getUpcomingTracks(count = 3) {
 
     return plannedQueue.slice(0, count).map((item, idx) => ({
       order: idx + 1,
+      rid: item.rid,
       playlistId: item.playlistId,
       playlistName: item.playlistName,
       playlistColor: item.playlistColor,
@@ -646,7 +743,8 @@ export async function getUpcomingTracks(count = 3) {
       artist: item.artist,
       duration: item.duration,
       ruleTitle: item.ruleTitle,
-      scheduleType: item.scheduleType
+      scheduleType: item.scheduleType,
+      isPriority: item.queue === QUEUE.PRIORITY
     }));
   } catch {
     return [];
@@ -657,12 +755,17 @@ export async function getUpcomingTracks(count = 3) {
  * 彙整整體廣播即時狀態 (提供 REST API 與 WebSocket 廣播)
  */
 export async function getRadioStatus() {
-  const [iceStats, metadata, remaining, upcomingTracks] = await Promise.all([
+  const [iceStats, metadata, remaining, upcomingRaw] = await Promise.all([
     icecast.getStats().catch(() => ({ online: false })),
     liquidsoap.getMetadata().catch(() => ({})),
     liquidsoap.getRemaining().catch(() => null),
-    getUpcomingTracks(3).catch(() => [])
+    getUpcomingTracks(4).catch(() => [])
   ]);
+  // 剛開始播的曲目在下一輪巡檢同步前仍留在 plannedQueue，用 on-air 的 rid 排除
+  const upcomingTracks = upcomingRaw
+    .filter((t) => !metadata.rid || t.rid !== metadata.rid)
+    .slice(0, 3)
+    .map(({ rid, ...t }, idx) => ({ ...t, order: idx + 1 }));
 
   const rawTitle = metadata.title || iceStats.title || 'CastFlow Live';
   const artist = metadata.artist || '雲原生自動化廣播電台';
@@ -712,7 +815,7 @@ export async function getRadioStatus() {
   // 取得所有動態歌單摘要
   const dbPlaylists = getAllPlaylists();
   const playlistsSummary = dbPlaylists.map((p) => {
-    const tracks = getPlaylistTracksFromDisk(p.folder);
+    const tracks = getPlaylistTracksFromDisk(p);
     return {
       id: p.id,
       name: p.name,

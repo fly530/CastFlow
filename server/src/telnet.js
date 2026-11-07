@@ -230,29 +230,18 @@ export class LiquidsoapClient extends EventEmitter {
   }
 
   /**
-   * 跳至下一首歌曲 (平滑淡出轉場，避免輸出硬切斷爆音)
+   * 跳至下一首歌曲 (平滑淡出轉場，避免輸出硬切斷爆音)。
+   * radio.skip 跳的是目前播出中的曲目，不論來自插播佇列、輪播佇列或保底歌單。
    */
   async skip() {
-    return await this.sendCommand('dynamic_queue.skip');
+    return await this.sendCommand('radio.skip');
   }
 
   /**
-   * 重新載入所有歌單資料夾
+   * 重新載入保底歌單資料夾
    */
   async reloadPlaylists() {
     return await this.sendCommand('radio.reload_all');
-  }
-
-  /**
-   * 取得特定歌單下預計播放之曲目
-   */
-  async getPlaylistNext(playlistId) {
-    try {
-      const res = await this.sendCommand(`playlist_${playlistId.toLowerCase()}.next`);
-      return res.trim();
-    } catch {
-      return null;
-    }
   }
 
   /**

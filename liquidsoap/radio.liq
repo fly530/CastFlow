@@ -32,12 +32,18 @@ hls_dir      = environment.get(default="/output/hls", "HLS_DIR")
 # 與後端 Node.js AutoDJ 智慧排程器統一決策，並透過 Telnet 推送至此佇列。
 dynamic_queue = request.queue(id="dynamic_queue")
 
+# 3.1 插播佇列 (定時插播 fixed_time / hourly、手動觸發)
+# 必須與 dynamic_queue 分開：dynamic_queue 平常會預先排好 3 首，插播若推到它的尾端，
+# 要等前面 2~3 首播完才會輪到 (21:30 的插播實際 21:40 才出來)。
+# 放在 fallback 的最前面，當前曲目一結束就優先播這裡。
+priority_queue = request.queue(id="priority_queue")
+
 # 4. 保底安全音訊源 (Safety Fallback)
 # 當 Node.js 伺服器冷啟動、重啟或佇列短暫為空時自動接管，防止電台斷流空轉。
 fallback_stream = playlist(id="fallback_stream", reload_mode="watch", mode="randomize", "#{music_dir}/A")
 
 # 混合排程：優先播放動態佇列，若隊列為空自動無縫切換至保底音源
-mixed_stream = fallback(track_sensitive=true, [dynamic_queue, fallback_stream])
+mixed_stream = fallback(track_sensitive=true, [priority_queue, dynamic_queue, fallback_stream])
 
 # 5. 平滑淡入淡出轉場 (crossfade with smooth envelope & anti-clipping)
 faded_stream = crossfade(
@@ -61,10 +67,17 @@ final_radio = mksafe(limited_radio)
 
 # 6. 自訂註冊 Telnet 指令 (提供後端管理面板查詢與調用)
 server.register(namespace="radio", description="取得廣播伺服器運作狀態", "status", fun (_) -> "ALIVE")
+# 跳過「目前播出中」的曲目，不論它來自哪一條佇列或保底歌單。
+# (dynamic_queue.skip 只對 dynamic_queue 自己有效，播的是插播或保底曲目時會失效)
 server.register(namespace="radio", description="平滑淡出切換至下一首曲目 (無爆音)", "skip", fun (_) -> begin
-  dynamic_queue.skip()
-  "OK: Skipped dynamic queue"
+  mixed_stream.skip()
+  "OK: Skipped current track"
 end)
+# 插播佇列的第一首是否已解析完成、可以立即播出。
+# 立即插播 (immediate_fade) 要等它 true 才跳歌，否則跳歌當下 fallback 會先接到下一個來源。
+server.register(namespace="radio", description="插播佇列是否已可播出", "priority_ready", fun (_) ->
+  string_of(priority_queue.is_ready())
+)
 server.register(namespace="radio", description="強制重新載入保底歌單資料夾", "reload_all", fun (_) -> begin
   fallback_stream.reload()
   "OK: Fallback stream reloaded"

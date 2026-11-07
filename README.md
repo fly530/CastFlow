@@ -162,8 +162,12 @@ Use [`compose.komodo.yaml`](./compose.komodo.yaml) (no published port, joins the
 ## Scheduling Runtime Dependency
 
 All scheduling decisions live in the backend Node.js AutoDJ scheduler (a 5-second tick),
-which pushes tracks into Liquidsoap's `dynamic_queue` over Telnet. `radio.liq` itself only
-handles the queue and crossfades — it contains no time-of-day logic. That is what makes
+which pushes tracks into Liquidsoap over Telnet: regular rotation goes into `dynamic_queue`
+(kept ~3 tracks ahead), fixed-time / hourly inserts go into `priority_queue`, which plays as
+soon as the current track ends. `radio.liq` itself only handles the queues and crossfades —
+it contains no time-of-day logic. After updating `radio.liq`, restart the `liquidsoap`
+container (`docker compose restart liquidsoap`); until then inserts fall back to the end of
+`dynamic_queue`. That is what makes
 admin-console schedule edits take effect immediately without reloading Liquidsoap.
 
 The trade-off: **when the `server` container is down, scheduling stops**. Broadcast does not go

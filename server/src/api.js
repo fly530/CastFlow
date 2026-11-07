@@ -33,7 +33,7 @@ import {
   updateSchedule,
   deleteSchedule
 } from './db.js';
-import { pushTrackToLiquidsoap, getPlaylistTracksFromDisk, skipCurrentTrack } from './scheduler.js';
+import { pushTrackToLiquidsoap, getNextTrackFromPlaylist, skipCurrentTrack, QUEUE } from './scheduler.js';
 import { broadcast } from './websocket.js';
 import {
   createBackup,
@@ -695,17 +695,23 @@ router.post('/schedules/:id/trigger', requireAuth, async (req, res) => {
     if (!schedule) {
       return res.status(404).json({ success: false, error: '排程不存在' });
     }
-    const tracks = getPlaylistTracksFromDisk(schedule.playlist_folder || schedule.playlist_id);
-    if (tracks.length === 0) {
+    // 與排程器同一套選曲 (shuffle / sequential)，手動觸發不會打亂該歌單的播放順序
+    const track = getNextTrackFromPlaylist(schedule.playlist_id);
+    if (!track) {
       return res.status(400).json({ success: false, error: '該歌單內目前無任何 MP3 曲目' });
     }
-    const randomTrack = tracks[Math.floor(Math.random() * tracks.length)];
-    const ok = await pushTrackToLiquidsoap(randomTrack.fullPath, schedule.interrupt_mode || 'wait_track_end');
+    // 手動觸發一律走插播佇列：等當前曲目結束就播 (immediate_fade 則立即切換)，
+    // 不會排在預排的輪播曲目後面
+    const ok = await pushTrackToLiquidsoap(
+      { track, playlistId: schedule.playlist_id, schedule, reason: 'manual' },
+      schedule.interrupt_mode || 'wait_track_end',
+      { queue: QUEUE.PRIORITY }
+    );
     if (ok) {
       res.json({
         success: true,
-        message: `已成功觸發「${schedule.title}」，準備播放「${randomTrack.filename}」`,
-        track: randomTrack.filename
+        message: `已成功觸發「${schedule.title}」，準備播放「${track.filename}」`,
+        track: track.filename
       });
     } else {
       res.status(500).json({ success: false, error: '推播至廣播引擎失敗' });

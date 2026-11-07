@@ -162,7 +162,10 @@ docker logs castflow-server | grep -E "Password|admin"
 ## 排程的執行依賴
 
 排程判斷全部在後端 Node.js 的 AutoDJ 排程器（每 5 秒一次），透過 Telnet 推送至
-Liquidsoap 的 `dynamic_queue`；`radio.liq` 本身只負責播放佇列與轉場，不含任何時段邏輯。
+Liquidsoap：一般輪播進 `dynamic_queue`（預排約 3 首），整點／定時插播進 `priority_queue`，
+當前曲目一結束就優先播出。`radio.liq` 本身只負責播放佇列與轉場，不含任何時段邏輯。
+更新 `radio.liq` 後要重啟 liquidsoap 容器（`docker compose restart liquidsoap`），
+在那之前插播會退回排在 `dynamic_queue` 尾端。
 這確保後台改排程立即生效、不需重載 Liquidsoap。
 
 代價是 **`server` 容器停止時排程會失效**：廣播不會中斷（`dynamic_queue` 為空時自動
