@@ -127,11 +127,20 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
       setErrorMsg('請選擇對應歌單');
       return;
     }
+    if (scheduleType === 'interval') {
+      const every = Number(intervalEveryTracks);
+      const play = Number(intervalPlayTracks);
+      if (!Number.isInteger(every) || every < 1 || !Number.isInteger(play) || play < 1) {
+        setErrorMsg('間隔插播的「每 X 首」與「插播 Y 首」都需為 1 以上的整數');
+        return;
+      }
+    }
 
     try {
       setIsSaving(true);
       setErrorMsg(null);
 
+      const effectiveAllDay = scheduleType === 'interval' ? true : isAllDay;
       let finalTargetTime = null;
       if (scheduleType === 'fixed_time') {
         finalTargetTime = targetTime;
@@ -144,9 +153,11 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
         playlist_id: playlistId,
         schedule_type: scheduleType,
         days_of_week: daysOfWeek.join(','),
-        is_all_day: isAllDay ? 1 : 0,
-        start_time: !isAllDay ? (startTime ? startTime.substring(0, 5) : null) : null,
-        end_time: !isAllDay ? (endTime ? endTime.substring(0, 5) : null) : null,
+        // 間隔插播的表單沒有時段設定：一律全天，避免沿用其他分頁留下的時段而被默默限縮
+        is_all_day: effectiveAllDay ? 1 : 0,
+        // 時間欄位未修改時，畫面上顯示的是預設值 (08:00 ~ 22:00)，送出的也要是同一個值
+        start_time: effectiveAllDay ? null : (startTime || (scheduleType === 'hourly' ? '11:00' : '08:00')).substring(0, 5),
+        end_time: effectiveAllDay ? null : (endTime || '22:00').substring(0, 5),
         target_time: finalTargetTime,
         target_date: scheduleType === 'fixed_time' && targetDate ? targetDate : null,
         interrupt_mode: interruptMode,

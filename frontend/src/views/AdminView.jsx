@@ -3,7 +3,6 @@ import Header from '../components/Header.jsx';
 import NowPlayingControl from '../components/NowPlayingControl.jsx';
 import PlaylistManager from '../components/PlaylistManager.jsx';
 import ScheduleManager from '../components/ScheduleManager.jsx';
-import FileUploadModal from '../components/FileUploadModal.jsx';
 import TelnetConsoleModal from '../components/TelnetConsoleModal.jsx';
 import LoginModal from '../components/LoginModal.jsx';
 import ChangePasswordModal from '../components/ChangePasswordModal.jsx';
@@ -25,7 +24,6 @@ export default function AdminView({
   const [status, setStatus] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'schedules' | 'backups'
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [uploadPlaylistId, setUploadPlaylistId] = useState(null);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
@@ -102,6 +100,15 @@ export default function AdminView({
     };
   }, [autoRefresh]);
 
+  // 仍在使用系統產生的初始密碼：登入後 (或重新整理頁面時) 提示改密碼，每次載入只提示一次
+  const passwordPromptedRef = useRef(false);
+  useEffect(() => {
+    if (currentUser?.passwordNeedsChange && !passwordPromptedRef.current) {
+      passwordPromptedRef.current = true;
+      setIsChangePasswordOpen(true);
+    }
+  }, [currentUser]);
+
   // 登出邏輯
   const handleLogout = () => {
     setToken(null);
@@ -123,12 +130,9 @@ export default function AdminView({
   if (!currentUser) {
     return (
       <LoginPage
-        onLoginSuccess={(user, needsChange) => {
+        onLoginSuccess={(user) => {
           setCurrentUser(user);
           showToast(`歡迎回來，${user.username}！`);
-          if (needsChange) {
-            setIsChangePasswordOpen(true);
-          }
         }}
         onSwitchToPlayer={onSwitchToPlayer}
       />
@@ -216,13 +220,6 @@ export default function AdminView({
             <PlaylistManager
               refreshTrigger={playlistRefreshKey}
               playlists={status?.playlistsSummary || []}
-              onOpenUpload={(playlistId) => {
-                if (!currentUser) {
-                  setIsLoginOpen(true);
-                } else {
-                  setUploadPlaylistId(playlistId);
-                }
-              }}
               onEditPlaylist={(pl) => {
                 if (!currentUser) {
                   setIsLoginOpen(true);
@@ -240,8 +237,8 @@ export default function AdminView({
                 }
               }}
               onRequestLogin={() => setIsLoginOpen(true)}
-              onTrackDeleted={(filename) => {
-                showToast(`已刪除曲目「${filename}」`);
+              onTracksChanged={(message) => {
+                showToast(message);
                 fetchStatus();
                 setPlaylistRefreshKey((k) => k + 1);
               }}
@@ -328,34 +325,22 @@ export default function AdminView({
       <LoginModal
         isOpen={isLoginOpen}
         onClose={() => setIsLoginOpen(false)}
-        onSuccess={(user, needsChange) => {
+        onSuccess={(user) => {
           setCurrentUser(user);
           showToast(`歡迎回來，${user.username}！`);
-          if (needsChange) {
-            setIsChangePasswordOpen(true);
-          }
         }}
       />
 
       {/* 修改密碼彈跳視窗 */}
       <ChangePasswordModal
         isOpen={isChangePasswordOpen}
+        required={Boolean(currentUser?.passwordNeedsChange)}
         onClose={() => setIsChangePasswordOpen(false)}
-        onSuccess={(msg) => showToast(msg)}
+        onSuccess={(msg) => {
+          showToast(msg);
+          setCurrentUser((u) => (u ? { ...u, passwordNeedsChange: false } : u));
+        }}
       />
-
-      {/* 檔案上傳對話框 */}
-      {uploadPlaylistId && (
-        <FileUploadModal
-          playlistId={uploadPlaylistId}
-          onClose={() => setUploadPlaylistId(null)}
-          onSuccess={() => {
-            showToast('檔案上傳成功並已排入曲庫');
-            fetchStatus();
-            setPlaylistRefreshKey((k) => k + 1);
-          }}
-        />
-      )}
 
       {/* Telnet 管理控制台 */}
       <TelnetConsoleModal

@@ -13,7 +13,7 @@ import {
   ListMusic,
   Clock
 } from 'lucide-react';
-import { authFetch } from '../utils/api.js';
+import { authFetch, readJson } from '../utils/api.js';
 
 export default function NowPlayingControl({
   status,
@@ -142,6 +142,11 @@ export default function NowPlayingControl({
           onRequestLogin?.();
           return;
         }
+        const json = await readJson(res);
+        if (!res.ok || !json.success) {
+          // 例如 Liquidsoap Telnet 斷線時回 500：不能照樣顯示「已跳播」
+          throw new Error(json.error || `HTTP ${res.status}`);
+        }
         if (onTrackSkipped) {
           onTrackSkipped();
         } else {
@@ -169,8 +174,17 @@ export default function NowPlayingControl({
       if (onReload) {
         await onReload();
       } else {
-        await authFetch('/api/control/reload', { method: 'POST' });
-        showToast?.('廣播排程已強制重新載入');
+        const res = await authFetch('/api/control/reload', { method: 'POST' });
+        if (res.status === 401) {
+          showToast?.('請先以管理員身分登入');
+          onRequestLogin?.();
+          return;
+        }
+        const json = await readJson(res);
+        if (!res.ok || !json.success) {
+          throw new Error(json.error || `HTTP ${res.status}`);
+        }
+        showToast?.('保底歌單已重新載入');
       }
     } catch (err) {
       showToast?.(`重新載入失敗: ${err.message}`);

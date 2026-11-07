@@ -18,7 +18,7 @@ export default function LoginPage({ onLoginSuccess, onSwitchToPlayer }) {
     try {
       setIsLoading(true);
       setError(null);
-      const res = await login(username.trim(), password.trim());
+      const res = await login(username.trim(), password);
       if (res.success) {
         onLoginSuccess?.(res.user, res.passwordNeedsChange);
       } else {

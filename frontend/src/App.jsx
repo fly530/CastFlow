@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import PlayerView from './views/PlayerView.jsx';
 import AdminView from './views/AdminView.jsx';
 import Toast from './components/Toast.jsx';
@@ -43,16 +43,23 @@ export default function App() {
   };
 
   // 驗證管理者 Session
+  const retryTimerRef = useRef(null);
   const checkSession = async () => {
+    clearTimeout(retryTimerRef.current);
     try {
       if (!getToken()) {
         setCurrentUser(null);
         return;
       }
-      const user = await getMe();
-      setCurrentUser(user);
-    } catch {
-      setCurrentUser(null);
+      const result = await getMe();
+      if (result.status === 'ok') {
+        setCurrentUser(result.user);
+      } else if (result.status === 'unauthorized') {
+        setCurrentUser(null);
+      } else {
+        // 網路暫時斷線或伺服器重啟中：token 仍有效，保留目前登入狀態，稍後重試
+        retryTimerRef.current = setTimeout(checkSession, 5000);
+      }
     } finally {
       setIsCheckingAuth(false);
     }
@@ -62,7 +69,10 @@ export default function App() {
     checkSession();
     const handleAuthChange = () => checkSession();
     window.addEventListener('castflow_auth_change', handleAuthChange);
-    return () => window.removeEventListener('castflow_auth_change', handleAuthChange);
+    return () => {
+      window.removeEventListener('castflow_auth_change', handleAuthChange);
+      clearTimeout(retryTimerRef.current);
+    };
   }, []);
 
   return (

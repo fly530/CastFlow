@@ -16,7 +16,8 @@ export default function TelnetConsoleModal({ isOpen, onClose, onRequestLogin }) 
     'icecast_mp3.metadata',
     'icecast_mp3.remaining',
     'radio.reload_all',
-    'playlist_a.next'
+    'priority_queue.queue',
+    'dynamic_queue.queue'
   ];
 
   const handleSend = async (cmdToSend) => {

@@ -21,14 +21,38 @@ import {
   ArrowRightLeft,
   Sliders
 } from 'lucide-react';
-import { authFetch } from '../utils/api.js';
+import { authFetch, readJson } from '../utils/api.js';
+
+const isUploadable = (file) => /\.(mp3|zip)$/i.test(file?.name || '');
+
+// 單次請求的上限：gateway 的 client_max_body_size 是 256M，留一些餘裕給 multipart 開銷。
+// 原本固定每批 20 個檔案，20 首 mp3 很容易超過 nginx 上限而整批 413。
+const MAX_BATCH_FILES = 20;
+const MAX_BATCH_BYTES = 200 * 1024 * 1024;
+
+/** 依檔案數與總大小切批；單一檔案超過上限時自成一批，交給伺服器回報 */
+function splitUploadBatches(files) {
+  const batches = [];
+  let current = [];
+  let bytes = 0;
+  for (const file of files) {
+    if (current.length > 0 && (current.length >= MAX_BATCH_FILES || bytes + file.size > MAX_BATCH_BYTES)) {
+      batches.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(file);
+    bytes += file.size;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
 
 export default function PlaylistManager({
   playlists = [],
-  onOpenUpload,
   onOpenNewPlaylist,
   onEditPlaylist,
-  onTrackDeleted,
+  onTracksChanged,
   onRequestLogin,
   refreshTrigger,
   refreshKey,
@@ -68,7 +92,7 @@ export default function PlaylistManager({
       setIsLoading(true);
       const res = await fetch(`/api/playlists/${playlistId}/tracks`);
       if (res.ok) {
-        const json = await res.json();
+        const json = await readJson(res);
         if (json.success) {
           setTracks(json.data || []);
         }
@@ -158,7 +182,7 @@ export default function PlaylistManager({
         return;
       }
 
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok || !json.success) {
         throw new Error(json.error || '刪除歌單失敗');
       }
@@ -186,11 +210,8 @@ export default function PlaylistManager({
     const traverseEntry = async (entry) => {
       if (entry.isFile) {
         const file = await new Promise((resolve) => entry.file(resolve, () => resolve(null)));
-        if (file) {
-          const name = file.name.toLowerCase();
-          if (name.endsWith('.mp3') || name.endsWith('.zip')) {
-            collectedFiles.push(file);
-          }
+        if (file && isUploadable(file)) {
+          collectedFiles.push(file);
         }
       } else if (entry.isDirectory) {
         const dirReader = entry.createReader();
@@ -214,19 +235,18 @@ export default function PlaylistManager({
       }
     };
 
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (item.webkitGetAsEntry) {
-        const entry = item.webkitGetAsEntry();
-        if (entry) {
-          await traverseEntry(entry);
-        } else {
-          const file = item.getAsFile();
-          if (file) collectedFiles.push(file);
-        }
-      } else {
-        const file = item.getAsFile();
-        if (file) collectedFiles.push(file);
+    // 必須在第一個 await 之前把所有項目取出來：drop 事件處理完 (遇到 await) 之後，
+    // 瀏覽器會清空 DataTransferItemList，一次拖入多個資料夾時只會讀到第一個。
+    const snapshot = Array.from(items, (item) => ({
+      entry: item.webkitGetAsEntry ? item.webkitGetAsEntry() : null,
+      file: item.kind === 'file' ? item.getAsFile() : null
+    }));
+
+    for (const { entry, file } of snapshot) {
+      if (entry) {
+        await traverseEntry(entry);
+      } else if (file && isUploadable(file)) {
+        collectedFiles.push(file);
       }
     }
 
@@ -234,28 +254,35 @@ export default function PlaylistManager({
   };
 
   // 執行音訊 / 壓縮檔 / 目錄檔案上傳
-  const uploadFiles = async (fileList) => {
-    if (!fileList || fileList.length === 0) return;
+  const uploadFiles = async (rawList) => {
+    if (!rawList || rawList.length === 0) return;
+    // 只送 mp3 / zip：選資料夾上傳常夾帶 cover.jpg、.DS_Store 等檔案
+    const fileList = rawList.filter(isUploadable);
+    const skippedLocal = rawList.length - fileList.length;
+    if (fileList.length === 0) {
+      setUploadMsg({ type: 'error', text: `沒有可上傳的 .mp3 或 .zip 檔案 (略過 ${skippedLocal} 個其他檔案)` });
+      return;
+    }
+
     try {
       setIsUploading(true);
       setUploadMsg(null);
       setUploadProgress({ current: 0, total: fileList.length, text: `正在準備上傳 ${fileList.length} 個檔案...` });
 
-      // 分批上傳（每批 10 檔）避免超過限制
-      const batchSize = 20;
-      let uploadedCount = 0;
+      const batches = splitUploadBatches(fileList);
+      let added = 0;
+      let skipped = skippedLocal;
+      const failures = [];
+      let sent = 0;
 
-      for (let i = 0; i < fileList.length; i += batchSize) {
-        const batch = fileList.slice(i, i + batchSize);
+      for (const batch of batches) {
         const formData = new FormData();
-        batch.forEach((file) => {
-          formData.append('files', file);
-        });
+        batch.forEach((file) => formData.append('files', file));
 
         setUploadProgress({
-          current: i,
+          current: sent,
           total: fileList.length,
-          text: `正在上傳第 ${i + 1} ~ ${Math.min(i + batchSize, fileList.length)} / 共 ${fileList.length} 個檔案...`
+          text: `正在上傳第 ${sent + 1} ~ ${sent + batch.length} / 共 ${fileList.length} 個檔案...`
         });
 
         const res = await authFetch(`/api/playlists/${selectedId}/upload`, {
@@ -264,24 +291,34 @@ export default function PlaylistManager({
         });
 
         if (res.status === 401) {
-          alert('請先登入管理員帳號後再上傳檔案');
+          setUploadMsg({ type: 'error', text: '登入已失效，請重新登入後再上傳' });
           onRequestLogin?.();
           return;
         }
 
-        const json = await res.json();
+        const json = await readJson(res);
+        added += json.files?.length || 0;
+        skipped += json.skipped?.length || 0;
         if (!res.ok || !json.success) {
-          throw new Error(json.error || '上傳失敗');
+          failures.push(json.error || `HTTP ${res.status}`);
         }
-
-        uploadedCount += batch.length;
+        for (const e of json.errors || []) failures.push(`${e.filename}: ${e.error}`);
+        sent += batch.length;
       }
 
       const targetPl = playlists.find((p) => p.id === selectedId);
       const targetName = targetPl?.name || `歌單 ${selectedId}`;
-      setUploadMsg({ type: 'success', text: `已成功上傳並收錄 ${uploadedCount} 個檔案至「${targetName}」！` });
-      fetchTracks(selectedId);
-      onRefresh?.();
+      const notes = [];
+      if (skipped > 0) notes.push(`略過 ${skipped} 個非 MP3/ZIP 檔案`);
+      if (failures.length > 0) notes.push(`${failures.length} 項失敗：${failures.slice(0, 3).join('；')}`);
+      setUploadMsg({
+        type: failures.length > 0 ? (added > 0 ? 'warning' : 'error') : 'success',
+        text: `已加入 ${added} 首曲目至「${targetName}」${notes.length ? `（${notes.join('，')}）` : ''}`
+      });
+      if (added > 0) {
+        fetchTracks(selectedId);
+        onRefresh?.();
+      }
     } catch (err) {
       setUploadMsg({ type: 'error', text: `上傳失敗: ${err.message}` });
     } finally {
@@ -328,10 +365,7 @@ export default function PlaylistManager({
     if (hasDirectory) {
       files = await getFilesFromDataTransfer(e.dataTransfer);
     } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      files = Array.from(e.dataTransfer.files).filter((f) => {
-        const name = f.name.toLowerCase();
-        return name.endsWith('.mp3') || name.endsWith('.zip');
-      });
+      files = Array.from(e.dataTransfer.files).filter(isUploadable);
     } else {
       files = await getFilesFromDataTransfer(e.dataTransfer);
     }
@@ -391,13 +425,13 @@ export default function PlaylistManager({
         return;
       }
 
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         setSelectedTrackFilenames([]);
         setTargetPlaylistId('');
         fetchTracks(selectedId);
         onRefresh?.();
-        onTrackDeleted?.();
+        onTracksChanged?.(json.message || '曲目已移動');
       } else {
         alert(json.error || '移動歌曲失敗');
       }
@@ -435,12 +469,12 @@ export default function PlaylistManager({
         return;
       }
 
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         setSelectedTrackFilenames([]);
         fetchTracks(selectedId);
         onRefresh?.();
-        onTrackDeleted?.();
+        onTracksChanged?.(json.message || '曲目已刪除');
       } else {
         alert(json.error || '刪除歌曲失敗');
       }
@@ -787,7 +821,9 @@ export default function PlaylistManager({
                   className={`mt-3 p-2.5 rounded-xl text-xs flex items-center justify-between ${
                     uploadMsg.type === 'success'
                       ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
-                      : 'bg-rose-500/10 text-rose-300 border border-rose-500/20'
+                      : uploadMsg.type === 'warning'
+                        ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20'
+                        : 'bg-rose-500/10 text-rose-300 border border-rose-500/20'
                   }`}
                 >
                   <span>{uploadMsg.text}</span>
