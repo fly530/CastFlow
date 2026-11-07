@@ -35,6 +35,13 @@ export function initDatabase() {
     );
   `);
 
+  // 使用系統產生的初始密碼時為 1，登入後前端會提示先改密碼；改過密碼即清除。
+  // (舊資料庫沒有這個欄位，就地補上)
+  const userColumns = database.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!userColumns.includes('must_change_password')) {
+    database.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
+  }
+
   // 2. 播放歷史紀錄表格
   database.exec(`
     CREATE TABLE IF NOT EXISTS play_history (
@@ -205,15 +212,16 @@ export function initDatabase() {
   const existingAdmin = checkStmt.get('admin');
 
   if (!existingAdmin) {
-    const initialPassword =
-      process.env.ADMIN_PASSWORD || `cf_${crypto.randomBytes(6).toString('hex')}`;
+    // ADMIN_PASSWORD 是站長自己指定的，不必強制修改；隨機產生的初始密碼印在日誌裡，要提示更換
+    const generated = !process.env.ADMIN_PASSWORD;
+    const initialPassword = process.env.ADMIN_PASSWORD || `cf_${crypto.randomBytes(6).toString('hex')}`;
     const salt = bcrypt.genSaltSync(10);
     const hash = bcrypt.hashSync(initialPassword, salt);
 
     const insertStmt = database.prepare(
-      'INSERT INTO users (username, password_hash) VALUES (?, ?)'
+      'INSERT INTO users (username, password_hash, must_change_password) VALUES (?, ?, ?)'
     );
-    insertStmt.run('admin', hash);
+    insertStmt.run('admin', hash, generated ? 1 : 0);
 
     console.log('\n' + '='.repeat(64));
     console.log(' [CastFlow Security] 管理員身分已自動建立 (Initial Admin Account):');
@@ -239,7 +247,7 @@ export function findUserByUsername(username) {
  */
 export function updateUserPassword(username, newPasswordHash) {
   const database = getDatabase();
-  const stmt = database.prepare('UPDATE users SET password_hash = ? WHERE username = ?');
+  const stmt = database.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE username = ?');
   return stmt.run(newPasswordHash, username);
 }
 

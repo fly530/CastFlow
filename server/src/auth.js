@@ -93,7 +93,8 @@ export async function loginUser(username, password) {
   return {
     success: true,
     token,
-    user: { id: user.id, username: user.username }
+    user: { id: user.id, username: user.username },
+    passwordNeedsChange: Boolean(user.must_change_password)
   };
 }
 

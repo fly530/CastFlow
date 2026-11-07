@@ -199,9 +199,15 @@ degrades to A-only with no visible error. Wire `server`'s `/health` into your al
 | `POST`| `/api/schedules` | JWT Required | Create a new scheduling rule (continuous or recurring) |
 | `PUT` | `/api/schedules/:id` | JWT Required | Update an existing scheduling rule |
 | `DELETE`| `/api/schedules/:id` | JWT Required | Delete a scheduling rule |
-| `GET` | `/api/backup/export` | JWT Required | Export configuration backup (JSON) |
-| `GET` | `/api/backup/export-full` | JWT Required | Export full station backup (ZIP with all MP3s) |
-| `POST`| `/api/backup/restore` | JWT Required | Restore station data from backup |
+| `POST`| `/api/schedules/:id/trigger` | JWT Required | Play a rule's playlist now (via the priority queue) |
+| `GET` | `/api/backups` | JWT Required | List backup files |
+| `POST`| `/api/backups` | JWT Required | Create a configuration backup (JSON) |
+| `POST`| `/api/backups/full-zip` | JWT Required | Create a full station backup (ZIP with all MP3s and the configuration) |
+| `GET` | `/api/backups/:filename/download` | JWT Required | Download a backup file |
+| `POST`| `/api/backups/:filename/restore` | JWT Required | Restore from a stored backup (JSON, or ZIP with its embedded configuration) |
+| `POST`| `/api/backups/restore-data` | JWT Required | Restore from an uploaded JSON backup (up to 20 MB) |
+| `POST`| `/api/logs/playback` | Public | Listener-side playback diagnostics report |
+| `GET` / `DELETE` | `/api/logs/playback` | JWT Required | Read / clear playback diagnostics (contains listener IPs) |
 
 ---
 

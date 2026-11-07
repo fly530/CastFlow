@@ -1,6 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
+// ★ execFileSync 而非 execSync：參數以陣列傳遞，不經過 shell。
+// 上傳檔名的清洗規則不會過濾 $ ` ( ) ; &，而 execSync 的字串在雙引號內
+// 仍會被 shell 展開 —— 一個叫 "$(...).zip" 的上傳檔就是容器內的任意指令執行。
+import { execFileSync } from 'child_process';
 import { getAudioMetadata } from './metadata.js';
 
 export const PLAYLIST_DEFS = {
@@ -231,6 +235,69 @@ export async function moveTracks(sourcePlaylistId, targetPlaylistId, filenames) 
 }
 
 /**
+ * 曲目檔名清洗 (上傳、改名共用)：只過濾路徑跳脫與檔案系統不允許的字元，
+ * 保留中文等原始檔名。副檔名不在 allowedExts 內時補上 .mp3。
+ */
+export function sanitizeTrackFilename(rawName, { allowedExts = ['.mp3'] } = {}) {
+  let cleanName = path
+    .basename(String(rawName ?? ''))
+    .replace(/[\/\\?%*:|"<>\x00-\x1f]/g, '_')
+    .trim();
+  if (!cleanName || cleanName === '.' || cleanName === '..' || cleanName.startsWith('.')) {
+    cleanName = `track_${Date.now()}${cleanName.startsWith('.') ? cleanName : ''}`;
+  }
+  if (!allowedExts.includes(path.extname(cleanName).toLowerCase())) {
+    cleanName += '.mp3';
+  }
+  return cleanName;
+}
+
+/** 目標資料夾已有同名檔案時加上序號 _1, _2 …，避免互相覆蓋 */
+export function uniqueFilename(dir, name) {
+  const ext = path.extname(name);
+  const base = path.basename(name, ext);
+  let finalName = name;
+  let counter = 1;
+  while (fs.existsSync(path.join(dir, finalName))) {
+    finalName = `${base}_${counter}${ext}`;
+    counter++;
+  }
+  return finalName;
+}
+
+/**
+ * 解開上傳的 ZIP：只取 mp3 (不分大小寫)、攤平目錄，檔名衝突時加序號而不是覆蓋。
+ * 回傳實際加入歌單的檔名。
+ *
+ * 先解到暫存子目錄再逐一搬入 —— 直接 `unzip -o` 到歌單資料夾會無聲覆蓋同名曲目。
+ * `-C` 讓 *.mp3 不分大小寫；舊寫法 "*.mp3" "*.MP3" 只要其中一個樣式沒對到，
+ * unzip 就以 exit 11 結束，上傳流程把它當成失敗。
+ */
+export function extractMp3sFromZip(zipFilePath, destDir) {
+  const tmpDir = fs.mkdtempSync(path.join(destDir, '.unzip-'));
+  try {
+    try {
+      execFileSync('/usr/bin/unzip', ['-j', '-o', '-q', '-C', zipFilePath, '*.mp3', '-d', tmpDir], {
+        stdio: 'ignore'
+      });
+    } catch (err) {
+      // exit 11 = 壓縮包內沒有任何 mp3；其他代碼才是真的解壓失敗
+      if (err.status !== 11) throw new Error(`解壓縮失敗 (unzip exit ${err.status ?? '?'})`);
+    }
+    const added = [];
+    for (const f of fs.readdirSync(tmpDir)) {
+      if (path.extname(f).toLowerCase() !== '.mp3') continue;
+      const finalName = uniqueFilename(destDir, sanitizeTrackFilename(f));
+      fs.renameSync(path.join(tmpDir, f), path.join(destDir, finalName));
+      added.push(finalName);
+    }
+    return added;
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
  * Multer 上傳中介軟體設定
  */
 const storage = multer.diskStorage({
@@ -244,40 +311,18 @@ const storage = multer.diskStorage({
     }
   },
   filename: (req, file, cb) => {
-    // 解決中文檔名被轉為底線並相互覆蓋的重大 Bug
+    // Multer 預設以 latin1 解析 multipart 標頭，UTF-8 中文檔名要轉回來
     let rawName = file.originalname;
     try {
-      // 處理 multipart 編碼可能造成的 latin1 亂碼 (Multer 預設以 latin1 解析 UTF-8 標頭)
       const recovered = Buffer.from(file.originalname, 'latin1').toString('utf8');
       if (recovered && !recovered.includes('\ufffd')) {
         rawName = recovered;
       }
     } catch {}
 
-    // 僅過濾路徑跳脫與危險字元，保留完整的繁體中文、英文等原始檔名
-    let cleanName = path.basename(rawName).replace(/[\/\\?%*:|"<>]/g, '_').trim();
-    if (!cleanName) {
-      cleanName = `track_${Date.now()}`;
-    }
-
-    const ext = path.extname(cleanName).toLowerCase();
-    if (ext !== '.mp3' && ext !== '.zip') {
-      cleanName += path.extname(file.originalname).toLowerCase() || '.mp3';
-    }
-
-    // 衝突防覆蓋：若目標資料夾已有同名檔案，自動加上序號 _1, _2
+    let cleanName = sanitizeTrackFilename(rawName, { allowedExts: ['.mp3', '.zip'] });
     try {
-      const destDir = getPlaylistDir(req.params.id);
-      let finalName = cleanName;
-      let counter = 1;
-      const baseWithoutExt = path.basename(cleanName, path.extname(cleanName));
-      const finalExt = path.extname(cleanName);
-
-      while (fs.existsSync(path.join(destDir, finalName))) {
-        finalName = `${baseWithoutExt}_${counter}${finalExt}`;
-        counter++;
-      }
-      cb(null, finalName);
+      cb(null, uniqueFilename(getPlaylistDir(req.params.id), cleanName));
     } catch {
       cb(null, cleanName);
     }
@@ -287,19 +332,16 @@ const storage = multer.diskStorage({
 export const uploadMiddleware = multer({
   storage,
   limits: { fileSize: 200 * 1024 * 1024 }, // 單檔最大 200MB (支援大型 ZIP 壓縮包)
+  // 只收 .mp3 與 .zip (以副檔名判斷；瀏覽器給的 MIME 不可靠)。
+  // 其他檔案略過而不是丟錯 —— 丟錯會讓同一批的其他曲目一起失敗
+  // (例如選資料夾上傳時夾帶的 cover.jpg)。略過的檔名放在 req.skippedFiles 回報給前端。
   fileFilter: (req, file, cb) => {
-    const orig = file.originalname.toLowerCase();
-    if (
-      file.mimetype.includes('audio') ||
-      file.mimetype.includes('zip') ||
-      file.mimetype.includes('compressed') ||
-      file.mimetype === 'application/octet-stream' ||
-      orig.endsWith('.mp3') ||
-      orig.endsWith('.zip')
-    ) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ext === '.mp3' || ext === '.zip') {
       cb(null, true);
     } else {
-      cb(new Error('僅支援 MP3 音訊檔案或 ZIP 壓縮包上傳'));
+      (req.skippedFiles ||= []).push(file.originalname);
+      cb(null, false);
     }
   }
 });

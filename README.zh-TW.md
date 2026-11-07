@@ -197,9 +197,15 @@ fallback 到 A 歌單隨機播放），但會安靜地退化成只播 A，沒有
 | `POST`| `/api/schedules` | JWT 驗證 | 新增智慧排程規則（連續輪播/整點定分插播） |
 | `PUT` | `/api/schedules/:id` | JWT 驗證 | 更新指定排程規則 |
 | `DELETE`| `/api/schedules/:id` | JWT 驗證 | 刪除指定排程規則 |
-| `GET` | `/api/backup/export` | JWT 驗證 | 匯出歌單與排程設定備份檔 (JSON) |
-| `GET` | `/api/backup/export-full` | JWT 驗證 | 匯出全站備份檔 (ZIP，含所有 MP3 音訊檔) |
-| `POST`| `/api/backup/restore` | JWT 驗證 | 匯入還原備份資料 |
+| `POST`| `/api/schedules/:id/trigger` | JWT 驗證 | 立即播出該規則的歌單（走插播佇列） |
+| `GET` | `/api/backups` | JWT 驗證 | 列出備份檔 |
+| `POST`| `/api/backups` | JWT 驗證 | 建立歌單與排程設定備份檔 (JSON) |
+| `POST`| `/api/backups/full-zip` | JWT 驗證 | 建立全站備份檔 (ZIP，含所有 MP3 與設定檔) |
+| `GET` | `/api/backups/:filename/download` | JWT 驗證 | 下載備份檔 |
+| `POST`| `/api/backups/:filename/restore` | JWT 驗證 | 從已存的備份還原（JSON，或 ZIP 內附的設定檔） |
+| `POST`| `/api/backups/restore-data` | JWT 驗證 | 上傳 JSON 備份內容還原（上限 20 MB） |
+| `POST`| `/api/logs/playback` | 公開 | 聽眾端回報播放診斷 |
+| `GET` / `DELETE` | `/api/logs/playback` | JWT 驗證 | 查詢／清空播放診斷日誌（含聽眾 IP） |
 
 ---
 

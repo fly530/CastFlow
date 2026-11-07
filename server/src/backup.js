@@ -2,7 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { getAllPlaylists, getAllSchedules, restorePlaylistsAndSchedules } from './db.js';
-import { getMusicBaseDir } from './playlists.js';
+import { getMusicBaseDir, resolvePlaylistDir, listMp3Files, normalizeFolderName } from './playlists.js';
+
+// 完整備份 ZIP 內附的設定檔名 (位於壓縮包根目錄)；還原時以它為準
+const EMBEDDED_CONFIG_NAME = 'castflow-backup.json';
 
 /**
  * 取得備份檔案儲存目錄 (/music/backups)
@@ -18,39 +21,24 @@ export function getBackupDir() {
 /**
  * 建立設定備份檔 (.json) 並寫入 backups 目錄
  */
-export function createBackup() {
-  const backupDir = getBackupDir();
+function timestampOf(now) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+/** 組出備份內容 (歌單、排程、各歌單目前在磁碟上的曲目快照) */
+function buildBackupData(now = new Date()) {
   const playlists = getAllPlaylists();
   const schedules = getAllSchedules();
 
-  // 取得各歌單目前在磁碟上的曲目快照
   let totalTracks = 0;
-  const baseDir = getMusicBaseDir();
   const enrichedPlaylists = playlists.map((pl) => {
-    const plDir = path.join(baseDir, pl.folder);
-    let tracks = [];
-    if (fs.existsSync(plDir)) {
-      try {
-        tracks = fs
-          .readdirSync(plDir)
-          .filter((f) => f.toLowerCase().endsWith('.mp3') && !f.startsWith('.'));
-      } catch {}
-    }
+    const tracks = listMp3Files(pl);
     totalTracks += tracks.length;
-    return {
-      ...pl,
-      trackCount: tracks.length,
-      tracks
-    };
+    return { ...pl, trackCount: tracks.length, tracks };
   });
 
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  const filename = `castflow_backup_${timestamp}.json`;
-  const filePath = path.join(backupDir, filename);
-
-  const backupData = {
+  return {
     version: '1.0',
     appName: 'CastFlow',
     createdAt: now.toISOString(),
@@ -63,8 +51,18 @@ export function createBackup() {
     playlists: enrichedPlaylists,
     schedules
   };
+}
 
-  // 寫入 UTF-8 JSON 檔案
+/**
+ * 建立設定備份檔 (.json) 並寫入 backups 目錄
+ */
+export function createBackup() {
+  const backupDir = getBackupDir();
+  const now = new Date();
+  const backupData = buildBackupData(now);
+  const filename = `castflow_backup_${timestampOf(now)}.json`;
+  const filePath = path.join(backupDir, filename);
+
   fs.writeFileSync(filePath, JSON.stringify(backupData, null, 2), 'utf-8');
   const stat = fs.statSync(filePath);
 
@@ -85,28 +83,29 @@ export function createBackup() {
 export function createFullZipBackup() {
   const backupDir = getBackupDir();
   const baseDir = getMusicBaseDir();
-
-  // 1. 先產生包含曲目快照的 JSON 配置檔
-  const jsonBackup = createBackup();
-
   const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  const zipFilename = `castflow_full_backup_${timestamp}.zip`;
+  const backupData = buildBackupData(now);
+  const zipFilename = `castflow_full_backup_${timestampOf(now)}.zip`;
   const zipFilePath = path.join(backupDir, zipFilename);
 
-  // 2. 將所有的歌單音訊資料夾打包進 ZIP，排除 backups、logs、sqlite db
+  // 設定檔放進 ZIP 根目錄：還原時才能確定用的是「同一次」備份的設定，
+  // 而不是 backups 資料夾裡剛好最新的那份 JSON (下載到別台機器時根本不存在)。
+  const tmpDir = fs.mkdtempSync(path.join(backupDir, '.zip-'));
+  const configPath = path.join(tmpDir, EMBEDDED_CONFIG_NAME);
   try {
-    // cwd 選項取代原本的 `cd "..." &&` —— 那個 shell 串接是這裡需要 shell
-    // 的唯一理由，拿掉之後就能改用不經過 shell 的 execFileSync。
-    // -x 的樣式由 zip 自己解讀，不需要 shell 展開。
+    fs.writeFileSync(configPath, JSON.stringify(backupData, null, 2), 'utf-8');
+    // cwd 選項取代 `cd "..." &&`，不需要 shell；-x 的樣式由 zip 自己解讀。
     execFileSync(
       '/usr/bin/zip',
       ['-r', '-q', zipFilePath, '.', '-x', 'backups/*', 'logs/*', '*.db*', '.*'],
       { cwd: baseDir, stdio: 'ignore' }
     );
+    execFileSync('/usr/bin/zip', ['-j', '-q', zipFilePath, configPath], { stdio: 'ignore' });
   } catch (err) {
+    fs.rmSync(zipFilePath, { force: true });
     throw new Error(`打包 ZIP 失敗: ${err.message}`);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
   const stat = fs.statSync(zipFilePath);
@@ -117,7 +116,7 @@ export function createFullZipBackup() {
     size: stat.size,
     isZip: true,
     createdAt: now.toISOString(),
-    stats: jsonBackup.stats
+    stats: backupData.stats
   };
 }
 
@@ -198,28 +197,51 @@ export function restoreBackupData(backupData) {
     throw new Error('備份格式不正確：缺少 playlists 或 schedules 清單陣列');
   }
 
+  // ★ folder 會被拿去組檔案系統路徑，寫進資料庫前要和 POST /api/playlists 套用同一套清洗；
+  //   備份檔是使用者上傳的內容，"../../app/src" 這種值不能原樣寫入。
+  const playlists = backupData.playlists
+    .filter((pl) => pl && typeof pl.id === 'string' && pl.id.trim() && pl.name)
+    .map((pl) => ({ ...pl, id: pl.id.trim(), folder: normalizeFolderName(pl.folder || pl.id, pl.id.trim()) }));
+  if (playlists.length === 0) {
+    throw new Error('備份格式不正確：沒有有效的歌單');
+  }
+  // 指向不存在歌單的排程寫進去也看不到 (排程查詢是 JOIN)，直接略過
+  const ids = new Set(playlists.map((pl) => pl.id));
+  const schedules = backupData.schedules.filter((sch) => sch && ids.has(sch.playlist_id));
+
   // 1. 還原至 SQLite 資料庫
-  restorePlaylistsAndSchedules(backupData.playlists, backupData.schedules);
+  restorePlaylistsAndSchedules(playlists, schedules);
 
   // 2. 確保還原後的每個歌單實體資料夾存在
-  const baseDir = getMusicBaseDir();
-  for (const pl of backupData.playlists) {
-    const folderName = pl.folder || pl.id;
-    const dir = path.join(baseDir, folderName);
-    if (!fs.existsSync(dir)) {
-      try {
-        fs.mkdirSync(dir, { recursive: true });
-      } catch (err) {
-        console.warn(`[Backup] 無法自動建立歌單資料夾 ${folderName}:`, err.message);
-      }
+  for (const pl of playlists) {
+    const dir = resolvePlaylistDir(pl);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (err) {
+      console.warn(`[Backup] 無法自動建立歌單資料夾 ${dir}:`, err.message);
     }
   }
 
   return {
     success: true,
-    playlistsRestored: backupData.playlists.length,
-    schedulesRestored: backupData.schedules.length
+    playlistsRestored: playlists.length,
+    schedulesRestored: schedules.length,
+    schedulesSkipped: backupData.schedules.length - schedules.length
   };
+}
+
+/** 讀出完整備份 ZIP 內附的設定檔；舊版 ZIP 沒有內附時回傳 null */
+function readEmbeddedConfig(zipPath) {
+  try {
+    const raw = execFileSync('/usr/bin/unzip', ['-p', zipPath, EMBEDDED_CONFIG_NAME], {
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore']
+    });
+    return JSON.parse(raw.toString('utf-8'));
+  } catch (err) {
+    if (err.status === 11) return null; // 壓縮包內沒有這個檔案
+    throw new Error(`讀取備份包內的設定檔失敗: ${err.message}`);
+  }
 }
 
 /**
@@ -231,25 +253,29 @@ export function restoreBackupFile(filename) {
     throw new Error('找不到指定的備份檔案');
   }
 
-  const baseDir = getMusicBaseDir();
-
-  // 若為 .zip 完整備份包，先自動解開檔案覆蓋回 /music
-  if (filename.toLowerCase().endsWith('.zip')) {
+  if (filePath.toLowerCase().endsWith('.zip')) {
+    const config = readEmbeddedConfig(filePath);
     try {
-      execFileSync('/usr/bin/unzip', ['-o', '-q', filePath, '-d', baseDir], { stdio: 'ignore' });
+      execFileSync('/usr/bin/unzip', ['-o', '-q', filePath, '-x', EMBEDDED_CONFIG_NAME, '-d', getMusicBaseDir()], {
+        stdio: 'ignore'
+      });
     } catch (err) {
       throw new Error(`解壓縮備份包失敗: ${err.message}`);
     }
-    // 解開後搜尋最近的 backup json 進行資料庫還原
-    const backupsInFolder = listBackups().filter((b) => !b.isZip);
-    if (backupsInFolder.length > 0) {
-      return restoreBackupFile(backupsInFolder[0].filename);
+    if (config) {
+      return { ...restoreBackupData(config), audioRestored: true };
     }
-    return { success: true, message: '已成功解開全站歌曲音訊！' };
+    // 舊版 ZIP 不含設定檔：只還原音訊，不去猜要套用哪一份 JSON
+    return {
+      success: true,
+      audioRestored: true,
+      configRestored: false,
+      playlistsRestored: 0,
+      schedulesRestored: 0,
+      message: '已還原全站歌曲音訊；此備份包為舊版格式、不含歌單設定，如需還原設定請另外套用對應的 JSON 備份'
+    };
   }
 
-  // 若為 .json 設定檔
   const raw = fs.readFileSync(filePath, 'utf-8');
-  const data = JSON.parse(raw);
-  return restoreBackupData(data);
+  return restoreBackupData(JSON.parse(raw));
 }

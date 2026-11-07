@@ -34,7 +34,7 @@ Each tick, `findDueFixedRule()` checks `fixed_time` / `hourly` rules (by `priori
 
 **Data**: SQLite via better-sqlite3 (WAL) at `$DATA_DIR/radio.db` (`server/src/db.js`). `initDatabase()` creates tables and, when empty, seeds playlists A–G with their default schedules and an admin user with a random `cf_…` password printed to the log. Playlists map to folders under `$MUSIC_DIR` (`playlists.js`); tracks are just `.mp3` files on disk (no track table), with ID3 read via `music-metadata` (`metadata.js`). Backups go to `$BACKUP_DIR` (`backup.js`).
 
-**API**: `server/src/api.js` is one Express router mounted at `/api`; admin routes use the JWT middleware from `auth.js`. `websocket.js` polls status (Telnet + Icecast JSON stats from `icecast.js`) and broadcasts `RADIO_STATUS` on `/ws`. `/health` is mounted outside `/api`.
+**API**: `server/src/app.js` `createApp()` builds the Express app (middleware, `/api` router, error handler) — `index.js` starts it, `test/api.test.js` exercises the same app. `server/src/api.js` is one Express router mounted at `/api`; schedule bodies go through `scheduleValidation.js`; admin routes use the JWT middleware from `auth.js`. `websocket.js` polls status (Telnet + Icecast JSON stats from `icecast.js`) and broadcasts `RADIO_STATUS` on `/ws`. `/health` is mounted outside `/api`.
 
 **Gateway** (`gateway/nginx.conf`, built by `gateway/Dockerfile` with build context = repo root because it compiles `frontend/`): serves the SPA, `/hls/` from the shared tmpfs, proxies `/api/`, `/ws` to `server:3001` and `/stream` to Icecast. Runs as `nginx-unprivileged` on port 8080 (mapped to 80).
 
@@ -44,8 +44,8 @@ Each tick, `findDueFixedRule()` checks `fixed_time` / `hourly` rules (by `priori
 
 These were fixed deliberately; the tests run real code paths, so don't loosen them or duplicate their logic in tests:
 - No `execSync` anywhere in `server/src` — use `execFileSync` with an argument array (ZIP upload extraction uses `/usr/bin/unzip` this way).
-- Playlist folders are sanitized before DB write and re-validated in `getPlaylistDir` so they can never escape `MUSIC_DIR`; unsafe folders fall back to the playlist id.
-- Track delete/move only accept `.mp3` basenames.
+- Playlist folders are sanitized before DB write (create and backup restore, `normalizeFolderName`) and re-validated in `resolvePlaylistDir`/`getPlaylistDir` so they can never escape `MUSIC_DIR`; unsafe folders fall back to the playlist id. Never build a playlist path from `pl.folder` directly.
+- Track delete/move/rename only accept `.mp3` basenames.
 - `server/Dockerfile` must set a non-root `USER`; gateway must use `nginx-unprivileged` on a non-privileged port.
 - `auth.js` exits at import time if `JWT_SECRET` is missing, shorter than 32 chars, or a known placeholder (tests set env vars *before* importing modules for this reason).
 

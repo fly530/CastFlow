@@ -1,11 +1,6 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-// ★ execFileSync 而非 execSync：參數以陣列傳遞，不經過 shell。
-// 上傳檔名的清洗規則（playlists.js）不會過濾 $ ` ( ) ; &，而 execSync 的
-// 字串在雙引號內仍會被 shell 展開 —— 一個叫 "$(...).zip" 的上傳檔就是
-// 容器內的任意指令執行。改用陣列參數後這條路徑整個消失。
-import { execFileSync } from 'child_process';
 import { liquidsoap } from './telnet.js';
 import { getRadioStatus } from './scheduler.js';
 import {
@@ -16,11 +11,14 @@ import {
   moveTracks,
   uploadMiddleware,
   getPlaylistDir,
-  getMusicBaseDir
+  getMusicBaseDir,
+  sanitizeTrackFilename,
+  extractMp3sFromZip
 } from './playlists.js';
 import { extractCoverArt, findTrackPathByTitle } from './metadata.js';
 import { requireAuth, loginUser, changePassword } from './auth.js';
 import {
+  findUserByUsername,
   getRecentHistory,
   getAllPlaylists,
   getPlaylistById,
@@ -35,6 +33,7 @@ import {
 } from './db.js';
 import { pushTrackToLiquidsoap, getNextTrackFromPlaylist, skipCurrentTrack, QUEUE } from './scheduler.js';
 import { broadcast } from './websocket.js';
+import { normalizeSchedule } from './scheduleValidation.js';
 import {
   createBackup,
   createFullZipBackup,
@@ -75,7 +74,15 @@ router.post('/auth/login', async (req, res) => {
  * 檢查目前登入身分
  */
 router.get('/auth/me', requireAuth, (req, res) => {
-  res.json({ success: true, user: req.user });
+  const user = findUserByUsername(req.user.username);
+  if (!user) {
+    return res.status(401).json({ success: false, error: '帳號不存在，請重新登入' });
+  }
+  res.json({
+    success: true,
+    user: { id: user.id, username: user.username },
+    passwordNeedsChange: Boolean(user.must_change_password)
+  });
 });
 
 /**
@@ -155,7 +162,7 @@ router.get('/nowplaying/coolradio', async (req, res) => {
  */
 router.get('/history', (req, res) => {
   try {
-    const limit = parseInt(req.query.limit || '10', 10);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 200);
     const history = getRecentHistory(limit);
     res.json({ success: true, data: history });
   } catch (err) {
@@ -221,12 +228,11 @@ router.post('/logs/playback', (req, res) => {
 /**
  * 查詢最新播放日誌
  */
-router.get('/logs/playback', (req, res) => {
+router.get('/logs/playback', requireAuth, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 100, MAX_LOGS);
   res.json({
     success: true,
     count: inMemoryLogs.length,
-    logFile: PLAYBACK_LOG_FILE,
     data: inMemoryLogs.slice(0, limit)
   });
 });
@@ -234,7 +240,7 @@ router.get('/logs/playback', (req, res) => {
 /**
  * 清空播放日誌
  */
-router.delete('/logs/playback', (req, res) => {
+router.delete('/logs/playback', requireAuth, (req, res) => {
   inMemoryLogs.length = 0;
   try {
     if (fs.existsSync(PLAYBACK_LOG_FILE)) {
@@ -372,55 +378,61 @@ router.post('/control/telnet', requireAuth, async (req, res) => {
  * 上傳 MP3 音訊檔案或 ZIP 壓縮包至指定歌單 (需驗證身分)
  */
 router.post('/playlists/:id/upload', requireAuth, uploadMiddleware.any(), async (req, res) => {
+  const files = req.files || [];
+  const skipped = req.skippedFiles || [];
   try {
-    const files = req.files || [];
     if (files.length === 0) {
-      return res.status(400).json({ success: false, error: '未選取任何檔案' });
+      return res.status(400).json({
+        success: false,
+        error: skipped.length > 0 ? `僅支援 MP3 或 ZIP，已略過 ${skipped.length} 個檔案` : '未選取任何檔案',
+        skipped
+      });
     }
 
     const destDir = getPlaylistDir(req.params.id);
-    let extractedCount = 0;
+    const added = [];
+    const errors = [];
 
-    // 若有上傳 ZIP 壓縮包，自動於後端解開所有 MP3 音訊檔案
     for (const f of files) {
-      const orig = f.originalname.toLowerCase();
-      if (orig.endsWith('.zip') || f.filename.toLowerCase().endsWith('.zip')) {
-        const zipFilePath = path.join(destDir, f.filename);
-        try {
-          // -j: 不要建立子目錄（全部平鋪進當前歌單資料夾）
-          // -o: 覆蓋已有同名檔案
-          // -q: 靜默執行
-          execFileSync(
-            '/usr/bin/unzip',
-            ['-j', '-o', '-q', zipFilePath, '*.mp3', '*.MP3', '-d', destDir],
-            { stdio: 'ignore' }
-          );
-          extractedCount++;
-        } catch (unzipErr) {
-          console.warn('[Upload] Unzip error:', unzipErr.message);
-        } finally {
-          try {
-            if (fs.existsSync(zipFilePath)) fs.unlinkSync(zipFilePath);
-          } catch {}
+      if (path.extname(f.filename).toLowerCase() !== '.zip') {
+        added.push(f.filename);
+        continue;
+      }
+      // ZIP：解出其中的 mp3 (攤平目錄、同名加序號)，壓縮包本身不保留
+      const zipFilePath = path.join(destDir, f.filename);
+      try {
+        const extracted = extractMp3sFromZip(zipFilePath, destDir);
+        if (extracted.length === 0) {
+          errors.push({ filename: f.originalname, error: '壓縮包內沒有 MP3' });
         }
+        added.push(...extracted);
+      } catch (unzipErr) {
+        console.warn('[Upload] Unzip error:', unzipErr.message);
+        errors.push({ filename: f.originalname, error: unzipErr.message });
+      } finally {
+        try {
+          fs.rmSync(zipFilePath, { force: true });
+        } catch {}
       }
     }
 
-    // 上傳後通知 Liquidsoap 重新加載
+    // 上傳後通知 Liquidsoap 重新加載保底歌單
     await liquidsoap.reloadPlaylists().catch(() => {});
-
-    // 即時透過 WebSocket 推播最新曲目總數
     getRadioStatus().then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
 
     const targetPl = getPlaylistById(req.params.id);
     const targetName = targetPl ? targetPl.name : req.params.id;
+    const notes = [];
+    if (skipped.length > 0) notes.push(`略過 ${skipped.length} 個非 MP3/ZIP 檔案`);
+    if (errors.length > 0) notes.push(`${errors.length} 個壓縮包處理失敗`);
 
-    res.json({
-      success: true,
-      message: `成功處理上傳檔案至「${targetName}」${
-        extractedCount > 0 ? ` (已自動解開 ${extractedCount} 個 ZIP 壓縮包中的 MP3)` : ''
-      }`,
-      files: files.map((f) => f.filename)
+    res.status(added.length > 0 ? 200 : 400).json({
+      success: added.length > 0,
+      message: `已加入 ${added.length} 首曲目至「${targetName}」${notes.length ? `（${notes.join('，')}）` : ''}`,
+      ...(added.length === 0 && { error: errors[0]?.error || '沒有可加入的曲目' }),
+      files: added,
+      skipped,
+      errors
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -437,14 +449,16 @@ router.put('/playlists/:id/tracks/:filename', requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, error: '請提供新的檔名' });
     }
 
-    const destDir = getPlaylistDir(req.params.id);
-    const oldPath = path.join(destDir, req.params.filename);
-
-    let targetName = newFilename.trim();
-    if (!targetName.toLowerCase().endsWith('.mp3')) {
-      targetName += '.mp3';
+    // 與刪除／移動同一條規則：只接受 mp3 的 basename (擋路徑穿越與改其他檔案)
+    const oldName = path.basename(req.params.filename);
+    if (oldName !== req.params.filename || path.extname(oldName).toLowerCase() !== '.mp3') {
+      return res.status(400).json({ success: false, error: '只能修改 .mp3 曲目' });
     }
-    const safeTargetName = targetName.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+    const destDir = getPlaylistDir(req.params.id);
+    const oldPath = path.join(destDir, oldName);
+
+    // 與上傳同一套清洗：保留中文檔名 (舊版把非英數字元全換成底線，「晴天」會變成「__」)
+    const safeTargetName = sanitizeTrackFilename(newFilename.trim());
     const newPath = path.join(destDir, safeTargetName);
 
     if (!fs.existsSync(oldPath)) {
@@ -650,9 +664,13 @@ router.get('/schedules', (req, res) => {
 /**
  * 新增排程規則
  */
+const playlistExists = (id) => Boolean(getPlaylistById(id));
+
 router.post('/schedules', requireAuth, (req, res) => {
   try {
-    const created = createSchedule(req.body);
+    const { error, data } = normalizeSchedule(req.body, { playlistExists });
+    if (error) return res.status(400).json({ success: false, error });
+    const created = createSchedule(data);
     res.json({ success: true, message: '排程已成功建立', data: created });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -664,10 +682,13 @@ router.post('/schedules', requireAuth, (req, res) => {
  */
 router.put('/schedules/:id', requireAuth, (req, res) => {
   try {
-    const updated = updateSchedule(req.params.id, req.body);
-    if (!updated) {
+    const existing = getScheduleById(req.params.id);
+    if (!existing) {
       return res.status(404).json({ success: false, error: '排程不存在' });
     }
+    const { error, data } = normalizeSchedule(req.body, { existing, playlistExists });
+    if (error) return res.status(400).json({ success: false, error });
+    const updated = updateSchedule(req.params.id, data);
     res.json({ success: true, message: '排程已更新', data: updated });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -819,7 +840,7 @@ router.post('/backups/:filename/restore', requireAuth, async (req, res) => {
     const result = restoreBackupFile(req.params.filename);
     res.json({
       success: true,
-      message: `備份還原成功！共還原 ${result.playlistsRestored} 個歌單與 ${result.schedulesRestored} 條排程`,
+      message: result.configRestored === false ? result.message : restoreMessage('備份還原成功！', result),
       data: result
     });
   } catch (err) {
@@ -836,13 +857,19 @@ router.post('/backups/restore-data', requireAuth, async (req, res) => {
     const result = restoreBackupData(backupData);
     res.json({
       success: true,
-      message: `上傳還原成功！共還原 ${result.playlistsRestored} 個歌單與 ${result.schedulesRestored} 條排程`,
+      message: restoreMessage('上傳還原成功！', result),
       data: result
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+function restoreMessage(prefix, result) {
+  const skipped = result.schedulesSkipped ? `（略過 ${result.schedulesSkipped} 條找不到歌單的排程）` : '';
+  const audio = result.audioRestored ? '已還原歌曲音訊，' : '';
+  return `${prefix}${audio}共還原 ${result.playlistsRestored} 個歌單與 ${result.schedulesRestored} 條排程${skipped}`;
+}
 
 function sendDefaultCoverSvg(res, title = 'CastFlow Live', artist = 'On Air') {
   const displayTitle = (title || 'CastFlow').replace(/[<>]/g, '').slice(0, 20);
