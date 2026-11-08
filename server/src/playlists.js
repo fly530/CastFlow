@@ -1,11 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
-// ★ execFileSync 而非 execSync：參數以陣列傳遞，不經過 shell。
+// ★ execFile 而非 execSync：參數以陣列傳遞，不經過 shell。
 // 上傳檔名的清洗規則不會過濾 $ ` ( ) ; &，而 execSync 的字串在雙引號內
 // 仍會被 shell 展開 —— 一個叫 "$(...).zip" 的上傳檔就是容器內的任意指令執行。
-import { execFileSync } from 'child_process';
+// 用非同步版：解開上百 MB 的 ZIP 時不卡住 WebSocket 推播與 AutoDJ。
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { getAudioMetadata } from './metadata.js';
+
+const execFileAsync = promisify(execFile);
 
 export const PLAYLIST_DEFS = {
   A: { name: 'Playlist A', role: '日常主力歌單 (75% 權重輪播)' },
@@ -89,13 +93,44 @@ export function getPlaylistDir(playlistId) {
 }
 
 /** 歌單資料夾內的 mp3 檔名清單 (資料夾不存在時回傳空陣列，不會建立) */
+// 資料夾 mtime 沒變 (沒有新增、刪除、改名) 就沿用上次的清單。
+// 狀態推播每秒都要算各歌單曲目數，曲庫大時每秒 readdir 好幾個上千檔的資料夾很浪費。
+// 剛變動不到 2 秒的資料夾不快取：部分檔案系統 (網路磁碟、FAT) 的 mtime 只到秒，
+// 同一秒內的第二次變動看不出來。
+const dirListCache = new Map(); // dir -> { mtimeMs, files }
+const DIR_CACHE_SETTLE_MS = 2000;
+
 export function listMp3Files(playlistOrId) {
   const dir = resolvePlaylistDir(playlistOrId);
   try {
-    return fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.mp3') && !f.startsWith('.'));
+    const { mtimeMs } = fs.statSync(dir);
+    const cached = dirListCache.get(dir);
+    if (cached && cached.mtimeMs === mtimeMs) return cached.files.slice();
+    const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.mp3') && !f.startsWith('.'));
+    if (Date.now() - mtimeMs > DIR_CACHE_SETTLE_MS) {
+      dirListCache.set(dir, { mtimeMs, files });
+    } else {
+      dirListCache.delete(dir);
+    }
+    return files.slice();
   } catch {
+    dirListCache.delete(dir);
     return [];
   }
+}
+
+/** 以固定並行數處理陣列 (保留原順序) */
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 /**
@@ -131,14 +166,9 @@ export async function getPlaylistTracks(playlistId) {
   const dir = getPlaylistDir(playlistId);
   const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.mp3'));
 
-  const tracks = await Promise.all(
-    files.map(async (filename) => {
-      const filePath = path.join(dir, filename);
-      return await getAudioMetadata(filePath);
-    })
-  );
-
-  return tracks;
+  // 原本一次對所有檔案 Promise.all：上千首的歌單會同時開上千個檔案 (EMFILE)，
+  // 記憶體也一起暴衝。限制同時解析 8 個，已解析過的會走 metadata 快取。
+  return mapWithConcurrency(files, 8, (filename) => getAudioMetadata(path.join(dir, filename)));
 }
 
 /**
@@ -273,16 +303,14 @@ export function uniqueFilename(dir, name) {
  * `-C` 讓 *.mp3 不分大小寫；舊寫法 "*.mp3" "*.MP3" 只要其中一個樣式沒對到，
  * unzip 就以 exit 11 結束，上傳流程把它當成失敗。
  */
-export function extractMp3sFromZip(zipFilePath, destDir) {
+export async function extractMp3sFromZip(zipFilePath, destDir) {
   const tmpDir = fs.mkdtempSync(path.join(destDir, '.unzip-'));
   try {
     try {
-      execFileSync('/usr/bin/unzip', ['-j', '-o', '-q', '-C', zipFilePath, '*.mp3', '-d', tmpDir], {
-        stdio: 'ignore'
-      });
+      await execFileAsync('/usr/bin/unzip', ['-j', '-o', '-q', '-C', zipFilePath, '*.mp3', '-d', tmpDir]);
     } catch (err) {
-      // exit 11 = 壓縮包內沒有任何 mp3；其他代碼才是真的解壓失敗
-      if (err.status !== 11) throw new Error(`解壓縮失敗 (unzip exit ${err.status ?? '?'})`);
+      // exit 11 = 壓縮包內沒有任何 mp3；其他代碼才是真的解壓失敗 (execFile 的 err.code 是結束代碼)
+      if (err.code !== 11) throw new Error(`解壓縮失敗 (unzip exit ${err.code ?? '?'})`);
     }
     const added = [];
     for (const f of fs.readdirSync(tmpDir)) {

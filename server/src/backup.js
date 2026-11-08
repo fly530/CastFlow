@@ -1,11 +1,33 @@
 import fs from 'fs';
 import path from 'path';
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { getAllPlaylists, getAllSchedules, restorePlaylistsAndSchedules } from './db.js';
 import { getMusicBaseDir, resolvePlaylistDir, listMp3Files, normalizeFolderName } from './playlists.js';
 
 // 完整備份 ZIP 內附的設定檔名 (位於壓縮包根目錄)；還原時以它為準
 const EMBEDDED_CONFIG_NAME = 'castflow-backup.json';
+
+// 非同步的 execFile (同樣以參數陣列執行、不經 shell)。
+// 原本用 execFileSync：打包幾 GB 曲庫的那幾分鐘，整個 Node 行程都停住 ——
+// WebSocket 不推播、AutoDJ 不補歌，佇列播完就只剩保底歌單。
+const execFileAsync = promisify(execFile);
+
+// 打包與還原同一時間只允許一個：改成非同步之後，連點或兩個分頁同時按就會真的並行
+let busyJob = null;
+async function exclusive(label, fn) {
+  if (busyJob) {
+    const err = new Error(`目前正在${busyJob}，請等它完成後再試`);
+    err.status = 409;
+    throw err;
+  }
+  busyJob = label;
+  try {
+    return await fn();
+  } finally {
+    busyJob = null;
+  }
+}
 
 /**
  * 取得備份檔案儲存目錄 (/music/backups)
@@ -81,28 +103,36 @@ export function createBackup() {
  * 建立全站完整備份檔 (.zip，含所有歌單設定與 MP3 音訊檔案)
  */
 export function createFullZipBackup() {
+  return exclusive('打包完整備份', buildFullZipBackup);
+}
+
+async function buildFullZipBackup() {
   const backupDir = getBackupDir();
   const baseDir = getMusicBaseDir();
   const now = new Date();
   const backupData = buildBackupData(now);
   const zipFilename = `castflow_full_backup_${timestampOf(now)}.zip`;
   const zipFilePath = path.join(backupDir, zipFilename);
+  // zip 會依副檔名補 .zip，暫存檔名本身就要以 .zip 結尾；開頭的 . 讓 listBackups 略過它
+  const partialPath = path.join(backupDir, `.partial-${zipFilename}`);
 
   // 設定檔放進 ZIP 根目錄：還原時才能確定用的是「同一次」備份的設定，
   // 而不是 backups 資料夾裡剛好最新的那份 JSON (下載到別台機器時根本不存在)。
   const tmpDir = fs.mkdtempSync(path.join(backupDir, '.zip-'));
   const configPath = path.join(tmpDir, EMBEDDED_CONFIG_NAME);
   try {
-    fs.writeFileSync(configPath, JSON.stringify(backupData, null, 2), 'utf-8');
+    await fs.promises.writeFile(configPath, JSON.stringify(backupData, null, 2), 'utf-8');
     // cwd 選項取代 `cd "..." &&`，不需要 shell；-x 的樣式由 zip 自己解讀。
-    execFileSync(
+    // 先寫到 .partial 再改名：打包途中失敗或重啟時，備份列表不會出現殘缺的 ZIP
+    await execFileAsync(
       '/usr/bin/zip',
-      ['-r', '-q', zipFilePath, '.', '-x', 'backups/*', 'logs/*', '*.db*', '.*'],
-      { cwd: baseDir, stdio: 'ignore' }
+      ['-r', '-q', partialPath, '.', '-x', 'backups/*', 'logs/*', '*.db*', '.*'],
+      { cwd: baseDir }
     );
-    execFileSync('/usr/bin/zip', ['-j', '-q', zipFilePath, configPath], { stdio: 'ignore' });
+    await execFileAsync('/usr/bin/zip', ['-j', '-q', partialPath, configPath]);
+    await fs.promises.rename(partialPath, zipFilePath);
   } catch (err) {
-    fs.rmSync(zipFilePath, { force: true });
+    fs.rmSync(partialPath, { force: true });
     throw new Error(`打包 ZIP 失敗: ${err.message}`);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -123,6 +153,9 @@ export function createFullZipBackup() {
 /**
  * 列出 backups 目錄下所有備份檔案 (.json 與 .zip)
  */
+// JSON 備份的摘要依 (檔名, mtime, 大小) 快取：每次打開備份分頁不必把每個備份重新讀一遍、解析一遍
+const summaryCache = new Map();
+
 export function listBackups() {
   const backupDir = getBackupDir();
   const files = fs.readdirSync(backupDir).filter((f) => (f.toLowerCase().endsWith('.json') || f.toLowerCase().endsWith('.zip')) && !f.startsWith('.'));
@@ -134,6 +167,13 @@ export function listBackups() {
       const stat = fs.statSync(filePath);
       const isZip = file.toLowerCase().endsWith('.zip');
 
+      const cacheKey = `${file}:${stat.mtimeMs}:${stat.size}`;
+      const cached = summaryCache.get(file);
+      if (cached && cached.key === cacheKey) {
+        backups.push(cached.summary);
+        continue;
+      }
+
       let content = null;
       if (!isZip) {
         try {
@@ -142,7 +182,7 @@ export function listBackups() {
         } catch {}
       }
 
-      backups.push({
+      const summary = {
         filename: file,
         size: stat.size,
         isZip,
@@ -153,10 +193,16 @@ export function listBackups() {
           schedulesCount: content?.schedules?.length || 0,
           totalTracks: content?.playlists?.reduce((sum, p) => sum + (p.trackCount || p.tracks?.length || 0), 0) || (isZip ? '含 MP3' : 0)
         }
-      });
+      };
+      summaryCache.set(file, { key: cacheKey, summary });
+      backups.push(summary);
     } catch (e) {
       console.error(`[Backup] Error reading backup file ${file}:`, e.message);
     }
+  }
+
+  for (const name of summaryCache.keys()) {
+    if (!files.includes(name)) summaryCache.delete(name);
   }
 
   // 依照建立時間降序排列 (最新在前)
@@ -231,15 +277,15 @@ export function restoreBackupData(backupData) {
 }
 
 /** 讀出完整備份 ZIP 內附的設定檔；舊版 ZIP 沒有內附時回傳 null */
-function readEmbeddedConfig(zipPath) {
+async function readEmbeddedConfig(zipPath) {
   try {
-    const raw = execFileSync('/usr/bin/unzip', ['-p', zipPath, EMBEDDED_CONFIG_NAME], {
+    const { stdout } = await execFileAsync('/usr/bin/unzip', ['-p', zipPath, EMBEDDED_CONFIG_NAME], {
       maxBuffer: 64 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore']
+      encoding: 'buffer'
     });
-    return JSON.parse(raw.toString('utf-8'));
+    return JSON.parse(stdout.toString('utf-8'));
   } catch (err) {
-    if (err.status === 11) return null; // 壓縮包內沒有這個檔案
+    if (err.code === 11) return null; // 壓縮包內沒有這個檔案 (execFile 的 err.code 是結束代碼)
     throw new Error(`讀取備份包內的設定檔失敗: ${err.message}`);
   }
 }
@@ -247,18 +293,19 @@ function readEmbeddedConfig(zipPath) {
 /**
  * 從 backups 目錄下的指定備份檔進行還原 (支援 .json 與 .zip)
  */
-export function restoreBackupFile(filename) {
+export async function restoreBackupFile(filename) {
   const filePath = getBackupPath(filename);
   if (!filePath) {
     throw new Error('找不到指定的備份檔案');
   }
+  return exclusive('還原備份', () => restoreFromPath(filePath));
+}
 
+async function restoreFromPath(filePath) {
   if (filePath.toLowerCase().endsWith('.zip')) {
-    const config = readEmbeddedConfig(filePath);
+    const config = await readEmbeddedConfig(filePath);
     try {
-      execFileSync('/usr/bin/unzip', ['-o', '-q', filePath, '-x', EMBEDDED_CONFIG_NAME, '-d', getMusicBaseDir()], {
-        stdio: 'ignore'
-      });
+      await execFileAsync('/usr/bin/unzip', ['-o', '-q', filePath, '-x', EMBEDDED_CONFIG_NAME, '-d', getMusicBaseDir()]);
     } catch (err) {
       throw new Error(`解壓縮備份包失敗: ${err.message}`);
     }
@@ -276,6 +323,6 @@ export function restoreBackupFile(filename) {
     };
   }
 
-  const raw = fs.readFileSync(filePath, 'utf-8');
+  const raw = await fs.promises.readFile(filePath, 'utf-8');
   return restoreBackupData(JSON.parse(raw));
 }

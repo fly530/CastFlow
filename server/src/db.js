@@ -19,6 +19,14 @@ export function getDatabase() {
   return db;
 }
 
+/** 關閉資料庫 (優雅關閉時呼叫：寫回 WAL，下次啟動不必再重播日誌) */
+export function closeDatabase() {
+  if (db) {
+    db.close();
+    db = null;
+  }
+}
+
 /**
  * 初始化資料庫表格與管理員預設帳密
  */
@@ -40,6 +48,11 @@ export function initDatabase() {
   const userColumns = database.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!userColumns.includes('must_change_password')) {
     database.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
+  }
+  // 改密碼時 +1，JWT 內帶著簽發當下的版本；版本對不上的舊 token 一律失效
+  // (原本改密碼後，外洩或留在別台電腦上的 token 仍能用滿 7 天)
+  if (!userColumns.includes('token_version')) {
+    database.exec('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
   }
 
   // 2. 播放歷史紀錄表格
@@ -247,7 +260,9 @@ export function findUserByUsername(username) {
  */
 export function updateUserPassword(username, newPasswordHash) {
   const database = getDatabase();
-  const stmt = database.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE username = ?');
+  const stmt = database.prepare(
+    'UPDATE users SET password_hash = ?, must_change_password = 0, token_version = token_version + 1 WHERE username = ?'
+  );
   return stmt.run(newPasswordHash, username);
 }
 

@@ -227,7 +227,7 @@ describe('備份還原', () => {
     assert.ok(!fs.existsSync('/tmp/castflow-restore-pwned'));
   });
 
-  test('完整備份 ZIP 以內附的設定檔還原，而不是 backups 資料夾裡最新的 JSON', () => {
+  test('完整備份 ZIP 以內附的設定檔還原，而不是 backups 資料夾裡最新的 JSON', async () => {
     const zipName = 'castflow_full_backup_test.zip';
     const config = {
       playlists: [{ id: 'Z', name: '來自 ZIP', folder: 'Z' }],
@@ -240,27 +240,38 @@ describe('備份還原', () => {
     // 干擾項：較新的、內容不同的 JSON 備份
     backup.createBackup();
 
-    const result = backup.restoreBackupFile(zipName);
+    const result = await backup.restoreBackupFile(zipName);
     assert.equal(result.playlistsRestored, 1);
     assert.deepEqual(db.getAllPlaylists().map((p) => p.id), ['Z']);
     assert.ok(fs.existsSync(path.join(MUSIC(), 'Z', 'zip-song.mp3')));
     assert.ok(!fs.existsSync(path.join(MUSIC(), 'castflow-backup.json')), '設定檔不該解到曲庫裡');
   });
 
-  test('舊版 ZIP (沒有內附設定)：只還原音訊，不套用不相干的 JSON', () => {
+  test('舊版 ZIP (沒有內附設定)：只還原音訊，不套用不相干的 JSON', async () => {
     const zipName = 'castflow_full_backup_legacy.zip';
     fs.writeFileSync(path.join(process.env.BACKUP_DIR, zipName), makeZip({ 'Z/legacy.mp3': 'audio' }));
     const before = db.getAllPlaylists().map((p) => p.id);
-    const result = backup.restoreBackupFile(zipName);
+    const result = await backup.restoreBackupFile(zipName);
     assert.equal(result.configRestored, false);
     assert.deepEqual(db.getAllPlaylists().map((p) => p.id), before);
     assert.ok(fs.existsSync(path.join(MUSIC(), 'Z', 'legacy.mp3')));
   });
 
-  test('完整備份 ZIP 內附設定檔', { skip: !fs.existsSync('/usr/bin/zip') && '主機沒有 /usr/bin/zip' }, () => {
-    const result = backup.createFullZipBackup();
+  test('完整備份 ZIP 內附設定檔', { skip: !fs.existsSync('/usr/bin/zip') && '主機沒有 /usr/bin/zip' }, async () => {
+    const result = await backup.createFullZipBackup();
     const listing = fs.readFileSync(result.path);
     assert.ok(listing.includes(Buffer.from('castflow-backup.json')));
+    assert.ok(!fs.readdirSync(process.env.BACKUP_DIR).some((f) => f.startsWith('.partial-')), '暫存檔應已改名');
+  });
+
+  test('打包與還原改成非同步後，同一時間只允許一個 (第二個回 409，不會並行解壓)', async () => {
+    const zipName = 'castflow_full_backup_concurrent.zip';
+    fs.writeFileSync(path.join(process.env.BACKUP_DIR, zipName), makeZip({ 'Z/concurrent.mp3': 'audio' }));
+    const first = backup.restoreBackupFile(zipName);
+    await assert.rejects(backup.restoreBackupFile(zipName), (err) => err.status === 409);
+    await first;
+    // 第一個完成後就能再做
+    await backup.restoreBackupFile(zipName);
   });
 });
 
@@ -300,6 +311,87 @@ describe('驗證與錯誤處理', () => {
     const changed = await auth.changePassword('admin', 'temp-pass-1', 'new-pass-2');
     assert.equal(changed.success, true);
     assert.equal((await auth.loginUser('admin', 'new-pass-2')).passwordNeedsChange, false);
+
+    // 改密碼後，之前簽發的 token (含改版前沒有 tv 的舊 token) 全部失效；改密碼回傳的新 token 可用
+    const me = (t) => fetch(`${baseUrl}/api/auth/me`, { headers: { Authorization: `Bearer ${t}` } });
+    assert.equal((await me(token)).status, 401);
+    assert.equal((await me(login.token)).status, 401);
+    assert.equal((await me(changed.token)).status, 200);
+    token = changed.token;
+  });
+
+  test('登入失敗限流：同一 IP 第 11 次起回 429，其他 IP 不受影響，成功登入後歸零', async () => {
+    auth.loginLimiter.clear();
+    const login = (ip, password = 'wrong') =>
+      fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        // 測試請求來自 127.0.0.1 (預設信任的 loopback)，X-Forwarded-For 會被當成來源 IP
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+        body: JSON.stringify({ username: 'admin', password })
+      });
+    for (let i = 0; i < auth.LOGIN_MAX_ATTEMPTS; i++) {
+      assert.equal((await login('203.0.113.7')).status, 401);
+    }
+    const blocked = await login('203.0.113.7', 'new-pass-2');
+    assert.equal(blocked.status, 429, '超過次數後連正確密碼也先擋下');
+    assert.ok(Number(blocked.headers.get('retry-after')) > 0);
+    assert.equal((await login('203.0.113.8')).status, 401, '別的 IP 照常驗證');
+
+    assert.equal((await login('203.0.113.9')).status, 401);
+    assert.equal((await login('203.0.113.9', 'new-pass-2')).status, 200);
+    auth.loginLimiter.clear();
+  });
+
+  test('聽眾日誌回報：欄位截斷、等級白名單、每個 IP 每分鐘有上限', async () => {
+    const post = (ip, body) =>
+      fetch(`${baseUrl}/api/logs/playback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+        body: JSON.stringify(body)
+      });
+    assert.equal((await post('198.51.100.1', { level: 'BOGUS', event: 'E'.repeat(500), message: 'm'.repeat(5000) })).status, 200);
+    const logs = await (await fetch(`${baseUrl}/api/logs/playback?limit=1`, { headers: authHeaders() })).json();
+    const entry = logs.data[0];
+    assert.equal(entry.level, 'INFO');
+    assert.equal(entry.event.length, 64);
+    assert.equal(entry.message.length, 500);
+    assert.equal(entry.clientIp, '198.51.100.1');
+
+    const statuses = [];
+    for (let i = 0; i < 31; i++) statuses.push((await post('198.51.100.2', { event: 'X' })).status);
+    assert.equal(statuses.filter((s) => s === 200).length, 30);
+    assert.equal(statuses.at(-1), 429);
+  });
+
+  test('TRUST_PROXY 解析', async () => {
+    const { parseTrustProxy } = await import(`${SRC}/app.js`);
+    assert.equal(parseTrustProxy(undefined), 'loopback, linklocal, uniquelocal');
+    assert.equal(parseTrustProxy('true'), true);
+    assert.equal(parseTrustProxy('false'), false);
+    assert.equal(parseTrustProxy('2'), 2);
+    assert.equal(parseTrustProxy('10.0.0.0/8'), '10.0.0.0/8');
+  });
+});
+
+// -----------------------------------------------------------------------------
+describe('狀態快取', () => {
+  test('並行的狀態查詢共用同一次計算；作廢後重新計算', async () => {
+    const scheduler = await import(`${SRC}/scheduler.js`);
+    scheduler.invalidateRadioStatus();
+    const [a, b] = await Promise.all([scheduler.getRadioStatus(), scheduler.getRadioStatus()]);
+    assert.equal(a, b, '同一時間只算一次');
+    assert.equal(await scheduler.getRadioStatus(), a, '1 秒內沿用快取');
+    assert.notEqual(await scheduler.getRadioStatus({ maxAgeMs: 0 }), a, 'maxAgeMs: 0 一定重算');
+  });
+
+  test('管理操作完成後作廢快取：歌單曲目數立刻反映', async () => {
+    const scheduler = await import(`${SRC}/scheduler.js`);
+    const count = (s) => s.playlistsSummary.find((p) => p.id === 'Z')?.trackCount;
+    const before = count(await scheduler.getRadioStatus({ maxAgeMs: 0 }));
+    const r = await upload('Z', { 'fresh-status.mp3': 'audio' });
+    assert.equal(r.status, 200);
+    const res = await (await fetch(`${baseUrl}/api/status`)).json();
+    assert.equal(count(res.data), before + 1);
   });
 });
 

@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { liquidsoap } from './telnet.js';
-import { getRadioStatus } from './scheduler.js';
+import { getRadioStatus, invalidateRadioStatus } from './scheduler.js';
 import {
   listPlaylists,
   getPlaylistTracks,
@@ -22,8 +22,10 @@ import {
   changePassword,
   signDownloadToken,
   verifyDownloadToken,
-  DOWNLOAD_TOKEN_TTL_SECONDS
+  DOWNLOAD_TOKEN_TTL_SECONDS,
+  loginLimiter
 } from './auth.js';
+import { createRateLimiter } from './rateLimit.js';
 import {
   findUserByUsername,
   getRecentHistory,
@@ -54,6 +56,15 @@ import {
 
 export const router = express.Router();
 
+// 狀態有 1 秒快取：任何管理操作 (跳歌、上傳、改歌單或排程…) 完成後就作廢，
+// 前端緊接著抓 /api/status 時才不會拿到操作前的舊資料。聽眾的日誌回報不算。
+router.use((req, res, next) => {
+  if (req.method !== 'GET' && !req.path.startsWith('/logs/')) {
+    res.on('finish', invalidateRadioStatus);
+  }
+  next();
+});
+
 // ==============================================================================
 // 1. 認證相關 API (Auth Endpoints)
 // ==============================================================================
@@ -63,14 +74,24 @@ export const router = express.Router();
  */
 router.post('/auth/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ success: false, error: '請提供帳號與密碼' });
+    }
+    // 依 req.ip 計次 (經 nginx 轉發時靠 app 的 trust proxy 取得真正的來源 IP)
+    const limit = loginLimiter.hit(req.ip);
+    if (limit.limited) {
+      res.setHeader('Retry-After', String(limit.retryAfterSec));
+      return res.status(429).json({
+        success: false,
+        error: `登入嘗試次數過多，請於 ${Math.ceil(limit.retryAfterSec / 60)} 分鐘後再試`
+      });
     }
     const result = await loginUser(username, password);
     if (!result.success) {
       return res.status(401).json(result);
     }
+    loginLimiter.reset(req.ip);
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -191,40 +212,59 @@ if (!fs.existsSync(LOGS_DIR)) {
 const PLAYBACK_LOG_FILE = path.join(LOGS_DIR, 'playback.log');
 const inMemoryLogs = [];
 const MAX_LOGS = 300;
+// playback.log 超過這個大小就輪替成 playback.log.1 (只留一份舊檔)，原本會無限長大
+const MAX_LOG_FILE_BYTES = 5 * 1024 * 1024;
+// 公開端點：每個 IP 每分鐘最多收 30 筆，超過的直接丟掉
+const playbackLogLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 30 });
+const LOG_LEVELS = new Set(['INFO', 'WARN', 'ERROR']);
 
+let logWriteChain = Promise.resolve();
 function appendPlaybackLog(entry) {
-  const line = `[${entry.timestamp || new Date().toISOString()}] [${entry.level || 'INFO'}] [${entry.streamType || 'unknown'}] [${entry.event || 'EVENT'}] ${entry.message || ''} ${entry.metrics ? JSON.stringify(entry.metrics) : ''}\n`;
+  const line = `[${entry.timestamp}] [${entry.level}] [${entry.streamType}] [${entry.event}] ${entry.message} ${entry.metrics ? JSON.stringify(entry.metrics) : ''}\n`;
   inMemoryLogs.unshift(entry);
   if (inMemoryLogs.length > MAX_LOGS) inMemoryLogs.pop();
 
-  try {
-    fs.appendFileSync(PLAYBACK_LOG_FILE, line, 'utf8');
-  } catch (err) {
-    console.error('Failed to append to playback.log:', err);
-  }
+  // 非同步依序寫入，不卡住 event loop
+  logWriteChain = logWriteChain
+    .then(async () => {
+      const stat = await fs.promises.stat(PLAYBACK_LOG_FILE).catch(() => null);
+      if (stat && stat.size > MAX_LOG_FILE_BYTES) {
+        await fs.promises.rename(PLAYBACK_LOG_FILE, `${PLAYBACK_LOG_FILE}.1`);
+      }
+      await fs.promises.appendFile(PLAYBACK_LOG_FILE, line, 'utf8');
+    })
+    .catch((err) => console.error('Failed to append to playback.log:', err.message));
+}
+
+/** 聽眾端送來的字串欄位：轉成字串並截斷，避免一筆就塞進幾 MB */
+function clip(value, max) {
+  return String(value ?? '').replace(/[\r\n]+/g, ' ').slice(0, max);
 }
 
 /**
  * 接收客戶端播放診斷日誌
  */
 router.post('/logs/playback', (req, res) => {
-  const {
-    level = 'INFO',
-    event = 'LOG',
-    message = '',
-    streamType = 'hls',
-    metrics = null,
-    timestamp = new Date().toISOString()
-  } = req.body || {};
-  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  const clientIp = req.ip || 'unknown';
+  if (playbackLogLimiter.hit(clientIp).limited) {
+    return res.status(429).json({ success: false, error: '日誌回報過於頻繁' });
+  }
+  const body = req.body || {};
+  const level = LOG_LEVELS.has(body.level) ? body.level : 'INFO';
+  let metrics = null;
+  if (body.metrics && typeof body.metrics === 'object') {
+    const json = JSON.stringify(body.metrics);
+    metrics = json.length <= 1000 ? body.metrics : null;
+  }
 
   const entry = {
-    id: Date.now() + Math.random().toString(36).substr(2, 4),
-    timestamp,
+    id: Date.now() + Math.random().toString(36).slice(2, 6),
+    // 時間以伺服器收到的為準：客戶端時鐘不可信，也可能塞任意字串
+    timestamp: new Date().toISOString(),
     level,
-    event,
-    streamType,
-    message,
+    event: clip(body.event || 'LOG', 64),
+    streamType: clip(body.streamType || 'unknown', 16),
+    message: clip(body.message, 500),
     metrics,
     clientIp
   };
@@ -247,15 +287,16 @@ router.get('/logs/playback', requireAuth, (req, res) => {
 /**
  * 清空播放日誌
  */
-router.delete('/logs/playback', requireAuth, (req, res) => {
+router.delete('/logs/playback', requireAuth, async (req, res) => {
   inMemoryLogs.length = 0;
-  try {
-    if (fs.existsSync(PLAYBACK_LOG_FILE)) {
-      fs.writeFileSync(PLAYBACK_LOG_FILE, '', 'utf8');
-    }
-  } catch (e) {
-    console.error('Failed to clear playback.log:', e);
-  }
+  // 排在尚未寫完的日誌之後清空，否則清完又被補寫回來
+  logWriteChain = logWriteChain.then(async () => {
+    await fs.promises.truncate(PLAYBACK_LOG_FILE, 0).catch((e) => {
+      if (e.code !== 'ENOENT') console.error('Failed to clear playback.log:', e.message);
+    });
+    await fs.promises.rm(`${PLAYBACK_LOG_FILE}.1`, { force: true }).catch(() => {});
+  });
+  await logWriteChain;
   res.json({ success: true, message: '播放診斷日誌已清空' });
 });
 
@@ -308,11 +349,16 @@ router.get('/playlists/:id/tracks/:filename/cover', async (req, res) => {
  */
 router.get('/current/cover', async (req, res) => {
   try {
-    const requestedTitle = req.query.title;
-    const metadata = await liquidsoap.getMetadata().catch(() => ({}));
-    const currentTitle = requestedTitle || metadata.title;
+    // 每位聽眾每次換歌都會打這支：沿用狀態快取裡的 on-air 檔案，不再每次各問 Liquidsoap 兩道 Telnet 指令
+    const status = await getRadioStatus().catch(() => null);
+    const onAir = status?.currentTrack || {};
+    const requestedTitle = typeof req.query.title === 'string' ? req.query.title : '';
+    const currentTitle = requestedTitle || onAir.title;
 
-    let filePath = metadata.filename && fs.existsSync(metadata.filename) ? metadata.filename : null;
+    let filePath = null;
+    if ((!requestedTitle || requestedTitle === onAir.title) && onAir.uri && fs.existsSync(onAir.uri)) {
+      filePath = onAir.uri;
+    }
     if (!filePath && currentTitle) {
       filePath = await findTrackPathByTitle(currentTitle);
     }
@@ -321,11 +367,12 @@ router.get('/current/cover', async (req, res) => {
       const cover = await extractCoverArt(filePath);
       if (cover && cover.buffer) {
         res.setHeader('Content-Type', cover.mimeType || 'image/jpeg');
-        res.setHeader('Cache-Control', 'public, max-age=10');
+        // 網址帶著曲名，同一個網址就是同一首歌的封面
+        res.setHeader('Cache-Control', requestedTitle ? 'public, max-age=3600' : 'public, max-age=10');
         return res.send(cover.buffer);
       }
     }
-    return sendDefaultCoverSvg(res, currentTitle, metadata.artist);
+    return sendDefaultCoverSvg(res, currentTitle, onAir.artist);
   } catch {
     return sendDefaultCoverSvg(res);
   }
@@ -343,7 +390,7 @@ router.post('/control/skip', requireAuth, async (req, res) => {
     const result = await skipCurrentTrack();
     setTimeout(async () => {
       try {
-        const s = await getRadioStatus();
+        const s = await getRadioStatus({ maxAgeMs: 0 });
         broadcast({ type: 'RADIO_STATUS', data: s });
       } catch {}
     }, 400);
@@ -408,7 +455,7 @@ router.post('/playlists/:id/upload', requireAuth, uploadMiddleware.any(), async 
       // ZIP：解出其中的 mp3 (攤平目錄、同名加序號)，壓縮包本身不保留
       const zipFilePath = path.join(destDir, f.filename);
       try {
-        const extracted = extractMp3sFromZip(zipFilePath, destDir);
+        const extracted = await extractMp3sFromZip(zipFilePath, destDir);
         if (extracted.length === 0) {
           errors.push({ filename: f.originalname, error: '壓縮包內沒有 MP3' });
         }
@@ -425,7 +472,7 @@ router.post('/playlists/:id/upload', requireAuth, uploadMiddleware.any(), async 
 
     // 上傳後通知 Liquidsoap 重新加載保底歌單
     await liquidsoap.reloadPlaylists().catch(() => {});
-    getRadioStatus().then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
+    getRadioStatus({ maxAgeMs: 0 }).then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
 
     const targetPl = getPlaylistById(req.params.id);
     const targetName = targetPl ? targetPl.name : req.params.id;
@@ -480,7 +527,7 @@ router.put('/playlists/:id/tracks/:filename', requireAuth, async (req, res) => {
     }
 
     await liquidsoap.reloadPlaylists().catch(() => {});
-    getRadioStatus().then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
+    getRadioStatus({ maxAgeMs: 0 }).then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
 
     res.json({ success: true, message: '曲目名稱已更新', filename: safeTargetName });
   } catch (err) {
@@ -502,7 +549,7 @@ router.delete('/playlists/:id/tracks/:filename', requireAuth, async (req, res) =
     await liquidsoap.reloadPlaylists().catch(() => {});
 
     // 即時透過 WebSocket 推播最新曲目總數
-    getRadioStatus().then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
+    getRadioStatus({ maxAgeMs: 0 }).then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
 
     res.json({ success: true, message: `已成功刪除 ${req.params.filename}` });
   } catch (err) {
@@ -523,7 +570,7 @@ router.post('/playlists/:id/tracks/batch-delete', requireAuth, async (req, res) 
     const result = await deleteTracks(req.params.id, filenames);
 
     await liquidsoap.reloadPlaylists().catch(() => {});
-    getRadioStatus().then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
+    getRadioStatus({ maxAgeMs: 0 }).then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
 
     res.json({
       success: true,
@@ -554,7 +601,7 @@ router.post('/playlists/:id/tracks/move', requireAuth, async (req, res) => {
     const result = await moveTracks(req.params.id, targetPlaylistId, filenames);
 
     await liquidsoap.reloadPlaylists().catch(() => {});
-    getRadioStatus().then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
+    getRadioStatus({ maxAgeMs: 0 }).then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
 
     res.json({
       success: true,
@@ -617,7 +664,7 @@ router.put('/playlists/:id', requireAuth, (req, res) => {
     if (!updated) {
       return res.status(404).json({ success: false, error: '歌單不存在' });
     }
-    getRadioStatus().then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
+    getRadioStatus({ maxAgeMs: 0 }).then((s) => broadcast({ type: 'RADIO_STATUS', data: s })).catch(() => {});
     res.json({ success: true, message: '歌單設定已更新', data: updated });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -788,16 +835,16 @@ router.post('/backups', requireAuth, (req, res) => {
 /**
  * 建立全站完整備份檔 (含所有歌單設定與 MP3 音訊，打包為 .zip)
  */
-router.post('/backups/full-zip', requireAuth, (req, res) => {
+router.post('/backups/full-zip', requireAuth, async (req, res) => {
   try {
-    const backup = createFullZipBackup();
+    const backup = await createFullZipBackup();
     res.json({
       success: true,
       message: `全站歌曲與設定備份已成功打包！已儲存至 backups/${backup.filename}`,
       data: backup
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 
@@ -874,14 +921,14 @@ router.delete('/backups/:filename', requireAuth, (req, res) => {
  */
 router.post('/backups/:filename/restore', requireAuth, async (req, res) => {
   try {
-    const result = restoreBackupFile(req.params.filename);
+    const result = await restoreBackupFile(req.params.filename);
     res.json({
       success: true,
       message: result.configRestored === false ? result.message : restoreMessage('備份還原成功！', result),
       data: result
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 

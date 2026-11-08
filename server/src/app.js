@@ -8,8 +8,23 @@ import { liquidsoap } from './telnet.js';
  * 與 index.js 的「啟動」分開，測試才能用真正的中介軟體設定跑 API，
  * 而不必連 Liquidsoap 或監聽固定 port。
  */
+/**
+ * TRUST_PROXY → Express 的 trust proxy 設定。
+ * 預設只信任私有網段來的 X-Forwarded-For (compose 內的 nginx gateway、Traefik)，
+ * req.ip 才會是聽眾真正的 IP —— 登入限流與日誌都靠它；
+ * 直接對外開放 3001 時，外部偽造的 X-Forwarded-For 不會被採信。
+ */
+export function parseTrustProxy(value) {
+  if (value === undefined || value === '') return 'loopback, linklocal, uniquelocal';
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (/^\d+$/.test(value)) return parseInt(value, 10);
+  return value;
+}
+
 export function createApp() {
   const app = express();
+  app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
 
   // 中介軟體設定
   app.use(cors());

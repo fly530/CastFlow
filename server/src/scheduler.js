@@ -697,10 +697,20 @@ function maybePruneHistory() {
   }
 }
 
+// 上一輪還沒跑完 (Telnet 卡住時一道指令最長等 5 秒) 就略過這一輪，不要讓巡檢越疊越多
+let isTickRunning = false;
 async function autoDJTick() {
-  await checkAndFeedQueue();
-  await pollNowPlaying();
-  maybePruneHistory();
+  if (isTickRunning) return;
+  isTickRunning = true;
+  try {
+    await checkAndFeedQueue();
+    await pollNowPlaying();
+    maybePruneHistory();
+  } catch (err) {
+    logThrottled('autodj-tick', `[Scheduler] AutoDJ 巡檢失敗: ${err.message}`);
+  } finally {
+    isTickRunning = false;
+  }
 }
 
 /**
@@ -719,6 +729,7 @@ export function startAutoDJScheduler() {
 
 export function stopAutoDJScheduler() {
   if (autoDJTimer) clearInterval(autoDJTimer);
+  autoDJTimer = null;
   isAutoDJRunning = false;
 }
 
@@ -751,10 +762,60 @@ export async function getUpcomingTracks(count = 3) {
   }
 }
 
+// 狀態快取：WebSocket 每秒推播、每個新連線、/api/status 輪詢、封面端點都要狀態，
+// 原本各算各的 —— 每次 3 道 Telnet 指令 + Icecast HTTP + 讀每個歌單資料夾。
+// 現在同一時間只算一次 (並行的呼叫共用同一個 Promise)，結果在 STATUS_MAX_AGE_MS 內重複使用。
+const STATUS_MAX_AGE_MS = 1000;
+let statusCache = null; // { at, data }
+let statusInflight = null;
+
 /**
  * 彙整整體廣播即時狀態 (提供 REST API 與 WebSocket 廣播)
+ * @param {object} [options]
+ * @param {number} [options.maxAgeMs] 可接受的快取年齡；0 表示一定重新計算 (仍會與進行中的計算合併)
  */
-export async function getRadioStatus() {
+export function getRadioStatus({ maxAgeMs = STATUS_MAX_AGE_MS } = {}) {
+  if (statusCache && Date.now() - statusCache.at < maxAgeMs) {
+    return Promise.resolve(statusCache.data);
+  }
+  if (!statusInflight) {
+    statusInflight = computeRadioStatus()
+      .then((data) => {
+        statusCache = { at: Date.now(), data };
+        return data;
+      })
+      .finally(() => {
+        statusInflight = null;
+      });
+  }
+  return statusInflight;
+}
+
+/** 讓下一次 getRadioStatus 重新計算 (跳歌、換排程等操作之後呼叫) */
+export function invalidateRadioStatus() {
+  statusCache = null;
+}
+
+// Liquidsoap 沒回報 duration 時改由檔案標籤推算；同一首歌只查一次。
+// 找不到檔案時 findTrackPathByTitle 會掃整個曲庫，原本每秒都重掃一次。
+let durationMemo = { key: null, duration: null };
+async function resolveFallbackDuration(initialUri, rawTitle) {
+  const key = `${initialUri}\u0000${rawTitle}`;
+  if (durationMemo.key === key) return durationMemo.duration;
+  let duration = null;
+  let filePath = initialUri;
+  if (!filePath || !fs.existsSync(filePath)) {
+    filePath = await findTrackPathByTitle(rawTitle);
+  }
+  if (filePath && fs.existsSync(filePath)) {
+    const audioMeta = await getAudioMetadata(filePath).catch(() => null);
+    if (audioMeta && audioMeta.duration > 0) duration = audioMeta.duration;
+  }
+  durationMemo = { key, duration };
+  return duration;
+}
+
+async function computeRadioStatus() {
   const [iceStats, metadata, remaining, upcomingRaw] = await Promise.all([
     icecast.getStats().catch(() => ({ online: false })),
     liquidsoap.getMetadata().catch(() => ({})),
@@ -783,16 +844,7 @@ export async function getRadioStatus() {
 
   // 若 Liquidsoap telnet 未回傳 duration，則由檔案 ID3 標籤或音訊解析取得
   if (!duration || duration <= 0) {
-    let filePath = initialUri;
-    if (!filePath || !fs.existsSync(filePath)) {
-      filePath = await findTrackPathByTitle(rawTitle);
-    }
-    if (filePath && fs.existsSync(filePath)) {
-      const audioMeta = await getAudioMetadata(filePath).catch(() => null);
-      if (audioMeta && audioMeta.duration > 0) {
-        duration = audioMeta.duration;
-      }
-    }
+    duration = await resolveFallbackDuration(initialUri, rawTitle);
   }
 
   let elapsed = 0;
@@ -815,15 +867,15 @@ export async function getRadioStatus() {
   // 取得所有動態歌單摘要
   const dbPlaylists = getAllPlaylists();
   const playlistsSummary = dbPlaylists.map((p) => {
-    const tracks = getPlaylistTracksFromDisk(p);
+    const count = listMp3Files(p).length;
     return {
       id: p.id,
       name: p.name,
       description: p.description || '',
       folder: p.folder,
       color: p.color,
-      count: tracks.length,
-      trackCount: tracks.length,
+      count,
+      trackCount: count,
       is_active: p.is_active,
       play_mode: p.play_mode,
       transition: p.transition

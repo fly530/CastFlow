@@ -3,8 +3,8 @@
 import 'dotenv/config';
 import { createApp } from './app.js';
 import { liquidsoap } from './telnet.js';
-import { initDatabase } from './db.js';
-import { setupWebSocket } from './websocket.js';
+import { initDatabase, closeDatabase } from './db.js';
+import { setupWebSocket, closeWebSocket } from './websocket.js';
 import { startAutoDJScheduler, stopAutoDJScheduler } from './scheduler.js';
 
 // 1. 初始化 SQLite 資料庫與安全憑證
@@ -41,15 +41,40 @@ liquidsoap.on('error', (err) => {
   console.error('[CastFlow Server] Liquidsoap Telnet Error:', err.message);
 });
 
-// 優雅關閉
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received. Shutting down gracefully...');
-  liquidsoap.disconnect();
-  server.close(() => process.exit(0));
-});
+// 優雅關閉。
+// 原本只呼叫 server.close()：它會等所有連線自己結束，但 WebSocket 與 keep-alive 連線不會自己斷，
+// 所以永遠等不到，最後被 docker 在 10 秒後 SIGKILL —— SQLite 的 WAL 沒寫回、排程計時器也沒停。
+const SHUTDOWN_TIMEOUT_MS = 8000; // 要比 docker 預設的 stop timeout (10 秒) 短
+let shuttingDown = false;
 
-process.on('SIGINT', () => {
-  console.log('SIGINT received. Shutting down gracefully...');
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received. Shutting down gracefully...`);
+
+  const forceTimer = setTimeout(() => {
+    console.warn('[CastFlow Server] Graceful shutdown timed out, forcing exit.');
+    server.closeAllConnections?.();
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+  forceTimer.unref();
+
+  stopAutoDJScheduler();
   liquidsoap.disconnect();
-  server.close(() => process.exit(0));
-});
+  await closeWebSocket().catch(() => {});
+  await new Promise((resolve) => {
+    server.close(() => resolve());
+    // 閒置的 keep-alive 連線直接關；進行中的請求 (例如上傳) 讓它跑完
+    server.closeIdleConnections?.();
+  });
+  try {
+    closeDatabase();
+  } catch (err) {
+    console.error('[CastFlow Server] Failed to close database:', err.message);
+  }
+  clearTimeout(forceTimer);
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

@@ -154,6 +154,8 @@ Use [`compose.komodo.yaml`](./compose.komodo.yaml) (no published port, joins the
 
 1. Create a Komodo Stack from this repo, **File Paths** = `compose.komodo.yaml`.
 2. Stack **Environment**: `JWT_SECRET`, `ICECAST_SOURCE_PASSWORD`, `ICECAST_ADMIN_PASSWORD`, `CASTFLOW_HOST`, `CASTFLOW_DATA_DIR` (see `.env.example`).
+   Optional `TRUST_PROXY`: which proxies' `X-Forwarded-For` the server believes (login rate limiting and logs use the client IP).
+   Empty means private networks only, which covers the gateway and Traefik. If another public proxy sits in front (e.g. Cloudflare), set its CIDR or a hop count such as `2`.
 3. If the GHCR packages are private, set the Image Registry of the Stack to `ghcr.io` (PAT with `read:packages`).
 4. Enable **Poll for Updates** + **Auto Update**. To roll back, pin the image tag to `sha-<short>`.
 
@@ -185,9 +187,9 @@ degrades to A-only with no visible error. Wire `server`'s `/health` into your al
 | `GET` | `/api/status` | Public | Unified broadcast status (now playing, progress, listeners, stats) |
 | `GET` | `/api/history` | Public | Recent playback history (SQLite) |
 | `GET` | `/api/current/cover`| Public | Album artwork image for currently playing track |
-| `POST`| `/api/auth/login` | Public | Admin login endpoint returning JWT token |
+| `POST`| `/api/auth/login` | Public | Admin login endpoint returning JWT token (10 attempts per IP per 15 minutes, then `429`) |
 | `GET` | `/api/auth/me` | JWT Required | Returns current authenticated administrator info |
-| `POST`| `/api/auth/change-password` | JWT Required | Change administrator password |
+| `POST`| `/api/auth/change-password` | JWT Required | Change administrator password; returns a new token and invalidates every previously issued one |
 | `POST`| `/api/control/skip` | JWT Required | Skip currently playing track |
 | `POST`| `/api/control/reload` | JWT Required | Force reload of all playlist audio folders |
 | `POST`| `/api/control/telnet` | JWT Required | Execute raw Liquidsoap Telnet commands |
@@ -207,7 +209,7 @@ degrades to A-only with no visible error. Wire `server`'s `/health` into your al
 | `GET` | `/api/backups/:filename/download` | JWT, or `?token=` from download-link | Download a backup file |
 | `POST`| `/api/backups/:filename/restore` | JWT Required | Restore from a stored backup (JSON, or ZIP with its embedded configuration) |
 | `POST`| `/api/backups/restore-data` | JWT Required | Restore from an uploaded JSON backup (up to 20 MB) |
-| `POST`| `/api/logs/playback` | Public | Listener-side playback diagnostics report |
+| `POST`| `/api/logs/playback` | Public | Listener-side playback diagnostics report (WARN/ERROR only, 30 per IP per minute; `playback.log` rotates at 5 MB) |
 | `GET` / `DELETE` | `/api/logs/playback` | JWT Required | Read / clear playback diagnostics (contains listener IPs) |
 
 ---
