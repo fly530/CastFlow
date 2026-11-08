@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import Hls from 'hls.js';
+import { loadHls } from '../utils/hls.js';
 import {
   Play,
   Pause,
@@ -43,21 +43,15 @@ export default function UnifiedPlayerCard({
   const [activeTab, setActiveTab] = useState('upcoming'); // 'upcoming' | 'history'
   const [history, setHistory] = useState([]);
 
-  const [localLogs, setLocalLogs] = useState([]);
-  const [audioDiagnostics, setAudioDiagnostics] = useState({
-    bufferAhead: 0,
-    readyState: 0,
-    networkState: 0,
-    isPlaying: false,
-    isWaiting: false,
-    errorCount: 0,
-    retryCount: 0
-  });
-
   const hlsStreamUrl = '/hls/live.m3u8';
   const mp3StreamUrl = '/stream';
   const waitingTimerRef = useRef(null);
-  const lastLogReportTime = useRef(0);
+  // 動態載入的 hls.js 類別 (載入前為 null)
+  const HlsRef = useRef(null);
+  // 各事件上次回報給後端的時間 (節流用)
+  const lastReportRef = useRef(new Map());
+  const streamTypeRef = useRef(streamType);
+  streamTypeRef.current = streamType;
   // 使用者「想不想聽」。切換串流來源時 <audio> 會被重新載入而停下，
   // 靠這個判斷載入完要不要自動接著播；耳機／媒體鍵暫停時也會同步改成 false。
   const wantPlayRef = useRef(false);
@@ -84,31 +78,25 @@ export default function UnifiedPlayerCard({
     return 0;
   };
 
-  // 紀錄日誌 (寫入前端 ring buffer 並同步發送至後端持久化)
+  // 播放診斷日誌。
+  // 原本每個 INFO (每載入一個 HLS 切片就一筆) 都存進 state、每 3 秒還送一筆到後端：
+  // 整張卡片每幾秒就重繪一次 (那份 state 其實沒有地方顯示)，聽眾一多後端就被日誌灌爆。
+  // 現在 INFO 只在開發模式印到 console；WARN / ERROR 才回報，同一事件 30 秒內只送一次。
   const logEvent = useCallback((level, event, message, metrics = null) => {
-    const entry = {
-      id: Date.now() + Math.random().toString(36).substr(2, 4),
-      timestamp: new Date().toISOString(),
-      level, // 'INFO' | 'WARN' | 'ERROR'
-      event,
-      streamType,
-      message,
-      metrics
-    };
-
-    setLocalLogs((prev) => [entry, ...prev.slice(0, 79)]);
-
-    // 發送至後端日誌 API (限制過度頻繁的 ping 避免 flood)
-    const now = Date.now();
-    if (level === 'ERROR' || level === 'WARN' || now - lastLogReportTime.current > 3000) {
-      lastLogReportTime.current = now;
-      fetch('/api/logs/playback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(entry)
-      }).catch(() => {});
+    if (level === 'INFO') {
+      if (import.meta.env.DEV) console.debug(`[Player] ${event}: ${message}`);
+      return;
     }
-  }, [streamType]);
+    const now = Date.now();
+    const last = lastReportRef.current.get(event) || 0;
+    if (now - last < 30000) return;
+    lastReportRef.current.set(event, now);
+    fetch('/api/logs/playback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level, event, streamType: streamTypeRef.current, message, metrics })
+    }).catch(() => {});
+  }, []);
 
   // 音畫智慧同步：當伺服器換曲時，若聽眾正在播放且耳機內仍有 4~5 秒音訊緩衝，
   // 延遲更新畫面資訊以完美貼合耳機聽到的新曲第一聲，並消除進度條倒退回彈動畫。
@@ -208,33 +196,41 @@ export default function UnifiedPlayerCard({
     }
   };
 
-  // 鍵盤快速鍵 (適用於客廳電視或電腦電視遙控操作)
+  // 鍵盤快速鍵 (適用於客廳電視或電腦電視遙控操作)。
+  // 監聽只註冊一次，透過 ref 呼叫最新的處理函式 —— 原本沒有 deps，每秒狀態推播一來就重新註冊一次。
+  const keyActionsRef = useRef({});
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (['INPUT', 'TEXTAREA'].includes(e.target?.tagName)) return;
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return; // 不搶瀏覽器快捷鍵 (Ctrl+F 等)
+      const target = e.target;
+      const tag = target?.tagName;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || target?.isContentEditable) return;
+      const actions = keyActionsRef.current;
       if (e.code === 'Space') {
+        // 焦點在按鈕上時，空白鍵本來就會觸發那顆按鈕，不要再額外切換播放
+        if (tag === 'BUTTON' || tag === 'A') return;
         e.preventDefault();
-        togglePlay();
+        actions.togglePlay?.();
       } else if (e.key === 'f' || e.key === 'F') {
         e.preventDefault();
-        toggleFullscreen();
+        actions.toggleFullscreen?.();
       } else if (e.key === 'm' || e.key === 'M') {
         e.preventDefault();
-        toggleMute();
+        actions.toggleMute?.();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  });
+  }, []);
 
-  // 初始化 HLS 實例
-  const initHls = (audio) => {
+  // 初始化 HLS 實例。Hls 為 null 表示 hls.js 載不到，當成不支援 MSE 處理 (改走原生 HLS 或 MP3)
+  const initHls = (audio, Hls) => {
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
     }
 
-    if (!Hls.isSupported()) {
+    if (!Hls || !Hls.isSupported()) {
       if (audio.canPlayType('application/vnd.apple.mpegurl')) {
         audio.src = hlsStreamUrl;
         audio.preload = 'auto';
@@ -296,7 +292,6 @@ export default function UnifiedPlayerCard({
 
     hls.on(Hls.Events.ERROR, (event, data) => {
       const detailMsg = `[${data.type}] ${data.details} ${data.response?.code ? `(HTTP ${data.response.code})` : ''}`;
-      setAudioDiagnostics((prev) => ({ ...prev, errorCount: prev.errorCount + 1 }));
 
       if (data.fatal) {
         logEvent('ERROR', 'FATAL_HLS_ERROR', detailMsg, { fatal: true, type: data.type });
@@ -332,15 +327,24 @@ export default function UnifiedPlayerCard({
     audio.volume = isMuted ? 0 : volume;
     switchingRef.current = wantPlayRef.current;
 
+    let cancelled = false;
     if (streamType === 'hls') {
-      initHls(audio);
-      // hls.js 會在 MANIFEST_PARSED 接著播；原生 HLS (Safari) 直接播
-      if (wantPlayRef.current && !Hls.isSupported() && audio.canPlayType('application/vnd.apple.mpegurl')) {
-        setIsLoading(true);
-        audio.play().catch(handlePlayRejected);
-      } else if (wantPlayRef.current) {
-        setIsLoading(true);
-      }
+      if (wantPlayRef.current) setIsLoading(true);
+      loadHls()
+        .catch((err) => {
+          console.warn('hls.js 載入失敗，改用瀏覽器原生 HLS 或 MP3:', err);
+          return null;
+        })
+        .then((Hls) => {
+          if (cancelled) return;
+          HlsRef.current = Hls;
+          initHls(audio, Hls);
+          // hls.js 會在 MANIFEST_PARSED 接著播；原生 HLS (Safari) 直接播
+          const native = (!Hls || !Hls.isSupported()) && audio.canPlayType('application/vnd.apple.mpegurl');
+          if (wantPlayRef.current && native) {
+            audio.play().catch(handlePlayRejected);
+          }
+        });
     } else {
       if (hlsRef.current) {
         hlsRef.current.destroy();
@@ -359,6 +363,7 @@ export default function UnifiedPlayerCard({
     }
 
     return () => {
+      cancelled = true;
       if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
       if (hlsRef.current) {
         hlsRef.current.destroy();
@@ -367,26 +372,17 @@ export default function UnifiedPlayerCard({
     };
   }, [streamType]);
 
-  // 定期音訊緩衝健康度診斷檢查 (每 2.5 秒)
+  // 定期音訊緩衝健康度診斷檢查 (每 2.5 秒，只在播放中執行)
   useEffect(() => {
+    if (!isPlaying) return undefined;
     const interval = setInterval(() => {
       const audio = audioRef.current;
       if (!audio) return;
 
       const bufferAhead = getBufferAhead(audio);
-      const isWaiting = audio.readyState < 3 && isPlaying;
-
-      setAudioDiagnostics((prev) => ({
-        ...prev,
-        bufferAhead,
-        readyState: audio.readyState,
-        networkState: audio.networkState,
-        isPlaying: !audio.paused && !audio.ended,
-        isWaiting
-      }));
 
       // 當播放中且緩衝嚴重不足 (小於 0.6 秒)，記錄警告日誌
-      if (isPlaying && !audio.paused && bufferAhead < 0.6 && audio.readyState < 4) {
+      if (!audio.paused && bufferAhead < 0.6 && audio.readyState < 4) {
         logEvent('WARN', 'BUFFER_LOW', `音訊前方緩衝量偏低: ${bufferAhead.toFixed(2)}s (ReadyState: ${audio.readyState})`, {
           bufferAhead: Number(bufferAhead.toFixed(2)),
           readyState: audio.readyState,
@@ -440,9 +436,14 @@ export default function UnifiedPlayerCard({
     logEvent('INFO', 'AUDIO_PLAY_REQUEST', `請求開始播放 (${streamType.toUpperCase()})`);
 
     if (streamType === 'hls') {
-      if (Hls.isSupported()) {
+      const Hls = HlsRef.current;
+      if (!Hls && !audio.getAttribute('src')) {
+        // hls.js 還在下載：載入完成後 MANIFEST_PARSED 會依 wantPlayRef 自動開始播
+        return;
+      }
+      if (Hls?.isSupported()) {
         if (!hlsRef.current) {
-          initHls(audio);
+          initHls(audio, Hls);
         } else {
           // 保持已預載好的緩衝切片，避免呼叫 loadSource() 沖刷掉緩衝
           hlsRef.current.startLoad();
@@ -496,13 +497,15 @@ export default function UnifiedPlayerCard({
     }
   };
 
+  // 給鍵盤快速鍵用的最新處理函式 (見上方只註冊一次的 keydown 監聽)
+  keyActionsRef.current = { togglePlay, toggleFullscreen, toggleMute };
+
   // 重新連線串流
   const reloadStream = () => {
     const audio = audioRef.current;
     if (!audio) return;
     setIsLoading(true);
     setErrorMsg(null);
-    setAudioDiagnostics((prev) => ({ ...prev, retryCount: prev.retryCount + 1 }));
     switchingRef.current = wantPlayRef.current;
     logEvent('INFO', 'STREAM_RELOAD', `手動觸發串流重連 (${streamType.toUpperCase()})`);
 
@@ -511,7 +514,7 @@ export default function UnifiedPlayerCard({
         hlsRef.current.loadSource(hlsStreamUrl);
         hlsRef.current.startLoad();
       } else {
-        initHls(audio);
+        initHls(audio, HlsRef.current);
       }
     } else {
       audio.src = `${mp3StreamUrl}?nocache=${Date.now()}`;

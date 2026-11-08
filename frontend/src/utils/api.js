@@ -98,6 +98,8 @@ export async function changePassword(oldPassword, newPassword) {
     });
     const data = await readJson(res);
     if (res.ok && data.success) {
+      // 改密碼會讓所有舊 token 失效 (含這個分頁的)，換成伺服器回傳的新 token 才能繼續操作
+      if (data.token) setToken(data.token);
       return { success: true, message: data.message };
     }
     return { success: false, error: data.error || '修改密碼失敗' };

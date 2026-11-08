@@ -34,7 +34,7 @@ export default function ChangePasswordModal({ isOpen, onClose, onSuccess, requir
         setOldPassword('');
         setNewPassword('');
         setConfirmPassword('');
-        onSuccess?.('密碼修改成功，下次請使用新密碼登入');
+        onSuccess?.('密碼修改成功；其他裝置上的登入已失效，需要用新密碼重新登入');
         onClose?.();
       } else {
         setError(res.error || '密碼修改失敗');
