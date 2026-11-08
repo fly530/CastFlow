@@ -16,7 +16,14 @@ import {
   extractMp3sFromZip
 } from './playlists.js';
 import { extractCoverArt, findTrackPathByTitle } from './metadata.js';
-import { requireAuth, loginUser, changePassword } from './auth.js';
+import {
+  requireAuth,
+  loginUser,
+  changePassword,
+  signDownloadToken,
+  verifyDownloadToken,
+  DOWNLOAD_TOKEN_TTL_SECONDS
+} from './auth.js';
 import {
   findUserByUsername,
   getRecentHistory,
@@ -795,21 +802,51 @@ router.post('/backups/full-zip', requireAuth, (req, res) => {
 });
 
 /**
+ * 取得備份檔的短效下載網址 (2 分鐘內有效、只能下載這一個檔案)。
+ * 前端拿到網址後直接交給瀏覽器下載，幾 GB 的 ZIP 也不會先整包讀進分頁記憶體。
+ */
+router.post('/backups/:filename/download-link', requireAuth, (req, res) => {
+  const filePath = getBackupPath(req.params.filename);
+  if (!filePath) {
+    return res.status(404).json({ success: false, error: '找不到指定的備份檔案' });
+  }
+  const filename = path.basename(filePath);
+  const token = signDownloadToken(filename);
+  res.json({
+    success: true,
+    url: `/api/backups/${encodeURIComponent(filename)}/download?token=${encodeURIComponent(token)}`,
+    filename,
+    expiresIn: DOWNLOAD_TOKEN_TTL_SECONDS
+  });
+});
+
+/** 下載端點接受兩種憑證：網址上的下載 token (瀏覽器直接下載)，或一般的 Authorization header */
+function requireAuthOrDownloadToken(req, res, next) {
+  if (req.query.token !== undefined) {
+    if (verifyDownloadToken(req.query.token, req.params.filename)) return next();
+    return res.status(401).json({ success: false, error: '下載連結已過期或無效，請重新點選下載' });
+  }
+  return requireAuth(req, res, next);
+}
+
+/**
  * 下載指定備份檔 (支援 .json 與 .zip)
  */
-router.get('/backups/:filename/download', requireAuth, (req, res) => {
+router.get('/backups/:filename/download', requireAuthOrDownloadToken, (req, res) => {
   try {
     const filePath = getBackupPath(req.params.filename);
     if (!filePath) {
       return res.status(404).json({ success: false, error: '找不到指定的備份檔案' });
     }
     const safeFilename = path.basename(filePath);
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeFilename)}"`);
+    // attachment() 會正確產生 filename / filename*=UTF-8'' 兩種寫法
+    res.attachment(safeFilename);
     if (safeFilename.toLowerCase().endsWith('.zip')) {
       res.setHeader('Content-Type', 'application/zip');
     } else {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
     }
+    res.setHeader('Cache-Control', 'no-store');
     res.sendFile(filePath);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

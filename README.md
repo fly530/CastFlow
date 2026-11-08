@@ -203,7 +203,8 @@ degrades to A-only with no visible error. Wire `server`'s `/health` into your al
 | `GET` | `/api/backups` | JWT Required | List backup files |
 | `POST`| `/api/backups` | JWT Required | Create a configuration backup (JSON) |
 | `POST`| `/api/backups/full-zip` | JWT Required | Create a full station backup (ZIP with all MP3s and the configuration) |
-| `GET` | `/api/backups/:filename/download` | JWT Required | Download a backup file |
+| `POST`| `/api/backups/:filename/download-link` | JWT Required | Get a short-lived (2 min) download URL bound to that file, so the browser downloads it directly |
+| `GET` | `/api/backups/:filename/download` | JWT, or `?token=` from download-link | Download a backup file |
 | `POST`| `/api/backups/:filename/restore` | JWT Required | Restore from a stored backup (JSON, or ZIP with its embedded configuration) |
 | `POST`| `/api/backups/restore-data` | JWT Required | Restore from an uploaded JSON backup (up to 20 MB) |
 | `POST`| `/api/logs/playback` | Public | Listener-side playback diagnostics report |

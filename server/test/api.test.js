@@ -302,3 +302,52 @@ describe('驗證與錯誤處理', () => {
     assert.equal((await auth.loginUser('admin', 'new-pass-2')).passwordNeedsChange, false);
   });
 });
+
+// -----------------------------------------------------------------------------
+describe('備份下載連結', () => {
+  const name = 'castflow-full-backup-test.zip';
+  before(() => {
+    fs.writeFileSync(path.join(process.env.BACKUP_DIR, name), 'zip-bytes');
+    fs.writeFileSync(path.join(process.env.BACKUP_DIR, 'other.zip'), 'other');
+  });
+
+  const linkFor = async (filename) => {
+    const r = await api('POST', `/api/backups/${encodeURIComponent(filename)}/download-link`);
+    return r;
+  };
+
+  test('短效連結不用 Authorization header 就能下載，且帶正確的下載檔名', async () => {
+    const r = await linkFor(name);
+    assert.equal(r.status, 200);
+    const res = await fetch(`${baseUrl}${r.body.url}`);
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), 'zip-bytes');
+    assert.match(res.headers.get('content-disposition'), /attachment; filename="castflow-full-backup-test\.zip"/);
+    assert.equal(res.headers.get('content-type'), 'application/zip');
+  });
+
+  test('連結綁定檔名：不能拿去下載別的備份', async () => {
+    const r = await linkFor(name);
+    const token = new URL(r.body.url, baseUrl).searchParams.get('token');
+    const res = await fetch(`${baseUrl}/api/backups/other.zip/download?token=${encodeURIComponent(token)}`);
+    assert.equal(res.status, 401);
+  });
+
+  test('下載 token 不能當登入憑證，登入 token 也不能放進網址下載', async () => {
+    const r = await linkFor(name);
+    const dlToken = new URL(r.body.url, baseUrl).searchParams.get('token');
+    const asBearer = await fetch(`${baseUrl}/api/backups`, { headers: { Authorization: `Bearer ${dlToken}` } });
+    assert.equal(asBearer.status, 401);
+    const loginInUrl = await fetch(`${baseUrl}/api/backups/${name}/download?token=${encodeURIComponent(token)}`);
+    assert.equal(loginInUrl.status, 401);
+  });
+
+  test('取得連結需要登入；不存在的檔案回 404；原本用 header 下載的方式照常可用', async () => {
+    const anon = await fetch(`${baseUrl}/api/backups/${name}/download-link`, { method: 'POST' });
+    assert.equal(anon.status, 401);
+    assert.equal((await linkFor('nope.zip')).status, 404);
+    assert.equal((await fetch(`${baseUrl}/api/backups/${name}/download`)).status, 401);
+    const withHeader = await fetch(`${baseUrl}/api/backups/${name}/download`, { headers: authHeaders() });
+    assert.equal(withHeader.status, 200);
+  });
+});

@@ -201,7 +201,8 @@ fallback 到 A 歌單隨機播放），但會安靜地退化成只播 A，沒有
 | `GET` | `/api/backups` | JWT 驗證 | 列出備份檔 |
 | `POST`| `/api/backups` | JWT 驗證 | 建立歌單與排程設定備份檔 (JSON) |
 | `POST`| `/api/backups/full-zip` | JWT 驗證 | 建立全站備份檔 (ZIP，含所有 MP3 與設定檔) |
-| `GET` | `/api/backups/:filename/download` | JWT 驗證 | 下載備份檔 |
+| `POST`| `/api/backups/:filename/download-link` | JWT 驗證 | 取得短效下載網址（2 分鐘內有效、只限該檔案），讓瀏覽器直接下載 |
+| `GET` | `/api/backups/:filename/download` | JWT 驗證，或 download-link 給的 `?token=` | 下載備份檔 |
 | `POST`| `/api/backups/:filename/restore` | JWT 驗證 | 從已存的備份還原（JSON，或 ZIP 內附的設定檔） |
 | `POST`| `/api/backups/restore-data` | JWT 驗證 | 上傳 JSON 備份內容還原（上限 20 MB） |
 | `POST`| `/api/logs/playback` | 公開 | 聽眾端回報播放診斷 |

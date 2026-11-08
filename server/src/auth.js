@@ -43,6 +43,31 @@ export function signJwtToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
 }
 
+// 備份下載用的短效簽章網址。瀏覽器直接用 <a href> 下載，不必把整包 ZIP 讀進記憶體再轉 Blob；
+// 但 <a href> 帶不了 Authorization header，所以改由網址上的 token 驗證。
+// 用 JWT_SECRET 衍生的另一把金鑰簽：下載 token 外洩 (網址會出現在存取日誌) 也不能拿去當登入憑證，
+// 登入 token 也不能塞進網址當下載 token。token 綁定檔名，2 分鐘內有效。
+const DOWNLOAD_SECRET = crypto.createHmac('sha256', JWT_SECRET).update('castflow:backup-download').digest();
+const DOWNLOAD_AUDIENCE = 'backup-download';
+export const DOWNLOAD_TOKEN_TTL_SECONDS = 120;
+
+export function signDownloadToken(filename) {
+  return jwt.sign({ f: filename }, DOWNLOAD_SECRET, {
+    expiresIn: DOWNLOAD_TOKEN_TTL_SECONDS,
+    audience: DOWNLOAD_AUDIENCE
+  });
+}
+
+export function verifyDownloadToken(token, filename) {
+  if (typeof token !== 'string' || !token) return false;
+  try {
+    const decoded = jwt.verify(token, DOWNLOAD_SECRET, { audience: DOWNLOAD_AUDIENCE });
+    return decoded.f === filename;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 驗證身分中介軟體 (保護 Admin 控制與檔案異動端點，僅接受 Authorization Header)
  */
