@@ -12,7 +12,8 @@ import BackupManager from '../components/BackupManager.jsx';
 import LoginPage from '../components/LoginPage.jsx';
 import StreamEndpointsCard from '../components/StreamEndpointsCard.jsx';
 import { Github, LayoutDashboard, Calendar, FolderArchive } from 'lucide-react';
-import { setToken, getToken } from '../utils/api.js';
+import { setToken } from '../utils/api.js';
+import { useRadioStatus } from '../hooks/useRadioStatus.js';
 
 export default function AdminView({
   currentUser,
@@ -21,7 +22,6 @@ export default function AdminView({
   onSwitchToPlayer,
   showToast
 }) {
-  const [status, setStatus] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'schedules' | 'backups'
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
@@ -33,72 +33,9 @@ export default function AdminView({
   const [editingPlaylist, setEditingPlaylist] = useState(null);
   const [playlistRefreshKey, setPlaylistRefreshKey] = useState(0);
   const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
-  const wsRef = useRef(null);
-
-  // 輪詢狀態 (作為備援機制)
-  const fetchStatus = async () => {
-    try {
-      const res = await fetch('/api/status');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
-          setStatus(json.data);
-        }
-      }
-    } catch {
-      // 網路暫態忽略
-    }
-  };
-
-  useEffect(() => {
-    fetchStatus();
-
-    // WebSocket 即時資料串流
-    let reconnectTimeout = null;
-    const connectWS = () => {
-      try {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws`;
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-
-        ws.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'RADIO_STATUS' && msg.data) {
-              setStatus(msg.data);
-            }
-          } catch (e) {
-            console.error('WS parse error', e);
-          }
-        };
-
-        ws.onclose = () => {
-          reconnectTimeout = setTimeout(connectWS, 3000);
-        };
-
-        ws.onerror = () => {
-          ws.close();
-        };
-      } catch {
-        reconnectTimeout = setTimeout(connectWS, 5000);
-      }
-    };
-
-    connectWS();
-
-    const interval = setInterval(() => {
-      if (autoRefresh) {
-        fetchStatus();
-      }
-    }, 8000);
-
-    return () => {
-      clearInterval(interval);
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (wsRef.current) wsRef.current.close();
-    };
-  }, [autoRefresh]);
+  // 「即時更新」關閉時暫停 WebSocket 與輪詢 (畫面停在當下的狀態)；
+  // 手動操作 (跳歌、改排程…) 之後仍會用 refresh() 抓一次最新狀態
+  const { status, connection, refresh: fetchStatus } = useRadioStatus({ enabled: autoRefresh, pollMs: 8000 });
 
   // 仍在使用系統產生的初始密碼：登入後 (或重新整理頁面時) 提示改密碼，每次載入只提示一次
   const passwordPromptedRef = useRef(false);
@@ -146,6 +83,7 @@ export default function AdminView({
         status={status}
         autoRefresh={autoRefresh}
         setAutoRefresh={setAutoRefresh}
+        connection={connection}
         currentUser={currentUser}
         onOpenLogin={() => setIsLoginOpen(true)}
         onOpenChangePassword={() => setIsChangePasswordOpen(true)}
@@ -237,6 +175,8 @@ export default function AdminView({
                 }
               }}
               onRequestLogin={() => setIsLoginOpen(true)}
+              showToast={showToast}
+              onRefresh={fetchStatus}
               onTracksChanged={(message) => {
                 showToast(message);
                 fetchStatus();
@@ -321,26 +261,30 @@ export default function AdminView({
         </div>
       </footer>
 
-      {/* 登入彈跳視窗 */}
-      <LoginModal
-        isOpen={isLoginOpen}
-        onClose={() => setIsLoginOpen(false)}
-        onSuccess={(user) => {
-          setCurrentUser(user);
-          showToast(`歡迎回來，${user.username}！`);
-        }}
-      />
+      {/* 登入彈跳視窗 (關閉即卸載，下次開啟不會殘留上次輸入的密碼與錯誤訊息) */}
+      {isLoginOpen && (
+        <LoginModal
+          isOpen
+          onClose={() => setIsLoginOpen(false)}
+          onSuccess={(user) => {
+            setCurrentUser(user);
+            showToast(`歡迎回來，${user.username}！`);
+          }}
+        />
+      )}
 
       {/* 修改密碼彈跳視窗 */}
-      <ChangePasswordModal
-        isOpen={isChangePasswordOpen}
-        required={Boolean(currentUser?.passwordNeedsChange)}
-        onClose={() => setIsChangePasswordOpen(false)}
-        onSuccess={(msg) => {
-          showToast(msg);
-          setCurrentUser((u) => (u ? { ...u, passwordNeedsChange: false } : u));
-        }}
-      />
+      {isChangePasswordOpen && (
+        <ChangePasswordModal
+          isOpen
+          required={Boolean(currentUser?.passwordNeedsChange)}
+          onClose={() => setIsChangePasswordOpen(false)}
+          onSuccess={(msg) => {
+            showToast(msg);
+            setCurrentUser((u) => (u ? { ...u, passwordNeedsChange: false } : u));
+          }}
+        />
+      )}
 
       {/* Telnet 管理控制台 */}
       <TelnetConsoleModal

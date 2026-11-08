@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, Terminal, Send, Play } from 'lucide-react';
-import { authFetch } from '../utils/api.js';
+import { authFetch, readJson } from '../utils/api.js';
 
 export default function TelnetConsoleModal({ isOpen, onClose, onRequestLogin }) {
   const [command, setCommand] = useState('radio.status');
@@ -38,7 +38,7 @@ export default function TelnetConsoleModal({ isOpen, onClose, onRequestLogin }) 
         return;
       }
 
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         setOutput((prev) => `> ${cmd}\n${json.result || '(空回應)'}\n\n${prev}`);
       } else {

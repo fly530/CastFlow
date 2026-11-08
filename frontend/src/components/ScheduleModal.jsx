@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Calendar, Clock, Sliders, Volume2, Sparkles, AlertCircle } from 'lucide-react';
-import { authFetch } from '../utils/api.js';
+import { authFetch, readJson } from '../utils/api.js';
 
 const DAYS = [
   { val: '1', label: '一' },
@@ -182,7 +182,7 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
         return;
       }
 
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         onSaved?.(json.message || '儲存成功');
         onClose();

@@ -109,9 +109,15 @@ export default function NowPlayingControl({
       // 加上時間戳避免快取舊串流，立即開啟緩衝
       audioRef.current.src = `/stream?nocache=${Date.now()}`;
       audioRef.current.play().catch((err) => {
-        console.warn('Audio monitor play blocked:', err);
         setIsLoadingMonitor(false);
         setIsMonitoring(false);
+        // 緩衝中按了取消：pause() 會讓 play() 以 AbortError 結束，不是錯誤
+        if (err?.name === 'AbortError') return;
+        console.warn('Audio monitor play blocked:', err);
+        showToast?.(
+          err?.name === 'NotAllowedError' ? '瀏覽器阻擋了自動播放，請再點一次監聽' : `無法連線至串流: ${err?.message || err}`,
+          'error'
+        );
       });
     }
   };
@@ -138,7 +144,7 @@ export default function NowPlayingControl({
       } else {
         const res = await authFetch('/api/control/skip', { method: 'POST' });
         if (res.status === 401) {
-          showToast?.('請先以管理員身分登入後再執行跳歌');
+          showToast?.('請先以管理員身分登入後再執行跳歌', 'error');
           onRequestLogin?.();
           return;
         }
@@ -162,7 +168,7 @@ export default function NowPlayingControl({
       setSkipSuccess(true);
       setTimeout(() => setSkipSuccess(false), 2000);
     } catch (err) {
-      showToast?.(`跳歌失敗: ${err.message}`);
+      showToast?.(`跳歌失敗: ${err.message}`, 'error');
     } finally {
       setIsSkipping(false);
     }
@@ -176,7 +182,7 @@ export default function NowPlayingControl({
       } else {
         const res = await authFetch('/api/control/reload', { method: 'POST' });
         if (res.status === 401) {
-          showToast?.('請先以管理員身分登入');
+          showToast?.('請先以管理員身分登入', 'error');
           onRequestLogin?.();
           return;
         }
@@ -187,7 +193,7 @@ export default function NowPlayingControl({
         showToast?.('保底歌單已重新載入');
       }
     } catch (err) {
-      showToast?.(`重新載入失敗: ${err.message}`);
+      showToast?.(`重新載入失敗: ${err.message}`, 'error');
     } finally {
       setIsReloading(false);
     }
@@ -214,7 +220,6 @@ export default function NowPlayingControl({
           setIsLoadingMonitor(false);
           setIsMonitoring(true);
         }}
-        onCanPlay={() => setIsLoadingMonitor(false)}
         onPause={() => {
           setIsMonitoring(false);
           setIsLoadingMonitor(false);
@@ -224,8 +229,14 @@ export default function NowPlayingControl({
           setIsLoadingMonitor(false);
         }}
         onError={() => {
+          // 停止監聽時會移除 src，那不算錯誤；只有正在監聽時的錯誤才提示
+          const wasActive = Boolean(audioRef.current?.getAttribute('src'));
           setIsMonitoring(false);
           setIsLoadingMonitor(false);
+          if (wasActive) {
+            audioRef.current.removeAttribute('src');
+            showToast?.('監聽串流中斷：無法連線至 Icecast /stream', 'error');
+          }
         }}
       />
 
@@ -250,20 +261,19 @@ export default function NowPlayingControl({
               <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-800 px-3 py-1.5 rounded-xl">
                 <button
                   onClick={toggleMonitoring}
-                  disabled={isLoadingMonitor}
                   className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg transition-all active:scale-95 ${
                     isMonitoring
                       ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30 ring-1 ring-purple-400/50'
                       : isLoadingMonitor
-                      ? 'bg-purple-900/60 text-purple-200 border border-purple-500/40 cursor-wait animate-pulse'
+                      ? 'bg-purple-900/60 text-purple-200 border border-purple-500/40 animate-pulse'
                       : 'bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/30'
                   }`}
-                  title={isMonitoring ? '暫停監聽' : isLoadingMonitor ? '正在連線串流緩衝中...' : '在後台即時收聽目前的現場廣播音訊'}
+                  title={isMonitoring ? '暫停監聽' : isLoadingMonitor ? '正在連線串流緩衝中，點擊取消' : '在後台即時收聽目前的現場廣播音訊'}
                 >
                   {isLoadingMonitor ? (
                     <>
                       <RotateCw className="w-3.5 h-3.5 animate-spin text-purple-300" />
-                      <span>連線緩衝中...</span>
+                      <span>連線緩衝中… (點擊取消)</span>
                     </>
                   ) : isMonitoring ? (
                     <>

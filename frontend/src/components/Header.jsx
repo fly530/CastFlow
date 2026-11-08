@@ -17,6 +17,7 @@ export default function Header({
   status,
   autoRefresh,
   setAutoRefresh,
+  connection = 'polling',
   currentUser,
   onOpenLogin,
   onOpenChangePassword,
@@ -114,7 +115,7 @@ export default function Header({
             </div>
           </div>
 
-          {/* 自動輪詢開關 */}
+          {/* 即時更新開關：關閉時暫停 WebSocket 與輪詢，畫面停在當下狀態 */}
           <button
             onClick={() => setAutoRefresh(!autoRefresh)}
             className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border transition-all ${
@@ -122,10 +123,21 @@ export default function Header({
                 ? 'bg-purple-600/10 border-purple-500/30 text-purple-300'
                 : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
             }`}
-            title="控制是否每 8 秒自動輪詢電台狀態作為備援"
+            title={
+              !autoRefresh
+                ? '已暫停即時更新，點擊恢復'
+                : connection === 'live'
+                ? '即時連線中 (WebSocket)，點擊暫停更新'
+                : '即時連線中斷，暫以每 8 秒輪詢更新並自動重連；點擊暫停更新'
+            }
           >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                !autoRefresh ? 'bg-slate-500' : connection === 'live' ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'
+              }`}
+            />
             <Activity className="w-3.5 h-3.5" />
-            <span>自動更新 {autoRefresh ? '開' : '關'}</span>
+            <span>{!autoRefresh ? '即時更新 已暫停' : connection === 'live' ? '即時更新' : '重新連線中'}</span>
           </button>
 
           {/* 開啟聽眾播放器 */}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, ListMusic, Palette, Shuffle, Radio, AlertCircle } from 'lucide-react';
-import { authFetch } from '../utils/api.js';
+import { authFetch, readJson } from '../utils/api.js';
 
 const COLOR_PRESETS = [
   '#3b82f6', // blue
@@ -80,7 +80,7 @@ export default function PlaylistModal({ isOpen, onClose, editingPlaylist, onSave
         return;
       }
 
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         onSaved?.(json.message || '歌單已成功儲存');
         onClose();

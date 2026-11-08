@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import PlayerView from './views/PlayerView.jsx';
 import AdminView from './views/AdminView.jsx';
 import Toast from './components/Toast.jsx';
@@ -17,10 +17,19 @@ export default function App() {
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [toast, setToast] = useState(null);
 
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
+  // 每次只顯示一則；新訊息會取代舊的並重新計時 (原本舊的計時器會提早把新訊息關掉)。
+  // 錯誤訊息停留久一點，來得及讀完。
+  const toastTimerRef = useRef(null);
+  const closeToast = useCallback(() => {
+    clearTimeout(toastTimerRef.current);
+    setToast(null);
+  }, []);
+  const showToast = useCallback((message, type = 'success') => {
+    clearTimeout(toastTimerRef.current);
+    setToast({ message, type, id: Date.now() });
+    toastTimerRef.current = setTimeout(() => setToast(null), type === 'error' ? 7000 : type === 'warning' ? 6000 : 4000);
+  }, []);
+  useEffect(() => () => clearTimeout(toastTimerRef.current), []);
 
   // 監聽瀏覽器上一頁 / 下一頁 (PopState)
   useEffect(() => {
@@ -92,7 +101,7 @@ export default function App() {
           showToast={showToast}
         />
       )}
-      <Toast toast={toast} onClose={() => setToast(null)} />
+      <Toast key={toast?.id} toast={toast} onClose={closeToast} />
     </>
   );
 }

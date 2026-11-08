@@ -56,8 +56,12 @@ export default function PlaylistManager({
   onRequestLogin,
   refreshTrigger,
   refreshKey,
-  onRefresh
+  onRefresh,
+  showToast
 }) {
+  // 原本這裡用 alert()，與其他頁面的 toast 不一致，且 alert 會卡住整個分頁 (含 WebSocket 更新)
+  const notify = (message, type = 'success') => (showToast ? showToast(message, type) : window.alert(message));
+
   const [selectedId, setSelectedId] = useState('A');
   const [tracks, setTracks] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -80,6 +84,7 @@ export default function PlaylistManager({
 
   const fileInputRef = useRef(null);
   const folderInputRef = useRef(null);
+  const uploadingRef = useRef(false);
 
   useEffect(() => {
     if (playlists.length > 0 && !playlists.some((p) => p.id === selectedId)) {
@@ -87,26 +92,63 @@ export default function PlaylistManager({
     }
   }, [playlists, selectedId]);
 
+  // 只採用「最後一次」請求的結果：快速切換歌單時，較慢的舊回應不能蓋掉新歌單的曲目，
+  // 否則畫面顯示 B 歌單、勾選到的卻是 A 歌單的檔名，批次刪除／移動就會送錯。
+  const tracksRequestRef = useRef(null);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+
   const fetchTracks = async (playlistId) => {
+    // 上傳／批次操作完成時若使用者已切到別的歌單，不必重抓 (也不能取消新歌單正在進行的請求)
+    if (playlistId !== selectedIdRef.current) return;
+    tracksRequestRef.current?.abort();
+    const controller = new AbortController();
+    tracksRequestRef.current = controller;
     try {
       setIsLoading(true);
-      const res = await fetch(`/api/playlists/${playlistId}/tracks`);
-      if (res.ok) {
-        const json = await readJson(res);
-        if (json.success) {
-          setTracks(json.data || []);
-        }
+      const res = await fetch(`/api/playlists/${encodeURIComponent(playlistId)}/tracks`, { signal: controller.signal });
+      const json = await readJson(res);
+      if (controller.signal.aborted || playlistId !== selectedIdRef.current) return;
+      if (res.ok && json.success) {
+        setTracks(json.data || []);
+      } else {
+        setTracks([]);
+        notify(`讀取曲目清單失敗: ${json.error || `HTTP ${res.status}`}`, 'error');
       }
-    } catch {
+    } catch (err) {
+      if (err.name === 'AbortError') return;
       setTracks([]);
+      notify(`讀取曲目清單失敗: ${err.message}`, 'error');
     } finally {
-      setIsLoading(false);
+      if (tracksRequestRef.current === controller) {
+        tracksRequestRef.current = null;
+        setIsLoading(false);
+      }
     }
   };
 
+  useEffect(() => () => tracksRequestRef.current?.abort(), []);
+
+  // AdminView 的 onTracksChanged 會顯示訊息、更新狀態並重抓曲目；沒有接時自己處理
+  const notifyTracksChanged = (message) => {
+    if (onTracksChanged) {
+      onTracksChanged(message);
+    } else {
+      notify(message);
+      fetchTracks(selectedIdRef.current);
+      onRefresh?.();
+    }
+  };
+
+  // 切換歌單：先清空舊清單與勾選，避免載入期間對著上一個歌單的曲目操作
   useEffect(() => {
+    setTracks([]);
     setSelectedTrackFilenames([]);
+    setTargetPlaylistId('');
     setUploadMsg(null);
+  }, [selectedId]);
+
+  useEffect(() => {
     fetchTracks(selectedId);
   }, [selectedId, refreshKey, refreshTrigger]);
 
@@ -138,16 +180,20 @@ export default function PlaylistManager({
         body: JSON.stringify({ name: editingPlaylistName.trim() })
       });
       if (res.status === 401) {
-        alert('請先以管理員身分登入後再修改歌單名稱');
+        notify('請先以管理員身分登入後再修改歌單名稱', 'error');
         onRequestLogin?.();
         return;
       }
-      if (res.ok) {
+      const json = await readJson(res);
+      if (res.ok && json.success !== false) {
         setEditingPlaylistId(null);
+        notify(`已將歌單名稱改為「${editingPlaylistName.trim()}」`);
         onRefresh?.();
+      } else {
+        notify(`修改歌單名稱失敗: ${json.error || `HTTP ${res.status}`}`, 'error');
       }
     } catch (err) {
-      alert(`修改歌單名稱失敗: ${err.message}`);
+      notify(`修改歌單名稱失敗: ${err.message}`, 'error');
     } finally {
       setIsSavingPlaylistName(false);
     }
@@ -157,13 +203,13 @@ export default function PlaylistManager({
   const handleDeletePlaylist = async (e, pl) => {
     e.stopPropagation();
     if (playlists.length <= 1) {
-      alert('電台系統至少需要保留一個歌單！');
+      notify('電台系統至少需要保留一個歌單！', 'warning');
       return;
     }
 
     const songCount = pl.trackCount ?? pl.count ?? 0;
     if (songCount > 0) {
-      alert(`無法刪除：歌單「${pl.name || pl.id}」內仍有 ${songCount} 首歌曲！\n請先將歌曲清空或移動至其他歌單後才能刪除。`);
+      notify(`無法刪除：歌單「${pl.name || pl.id}」內仍有 ${songCount} 首歌曲！\n請先將歌曲清空或移動至其他歌單後才能刪除。`, 'warning');
       return;
     }
 
@@ -177,7 +223,7 @@ export default function PlaylistManager({
       });
 
       if (res.status === 401) {
-        alert('請先以管理員身分登入');
+        notify('請先以管理員身分登入', 'error');
         onRequestLogin?.();
         return;
       }
@@ -186,6 +232,7 @@ export default function PlaylistManager({
       if (!res.ok || !json.success) {
         throw new Error(json.error || '刪除歌單失敗');
       }
+      notify(json.message || `已刪除歌單「${pl.name || pl.id}」`);
 
       // 若刪除的是當前選取的歌單，自動切換至剩餘第一個歌單
       const remaining = playlists.filter((p) => p.id !== pl.id);
@@ -195,7 +242,7 @@ export default function PlaylistManager({
 
       onRefresh?.();
     } catch (err) {
-      alert(`刪除失敗: ${err.message}`);
+      notify(`刪除失敗: ${err.message}`, 'error');
     }
   };
 
@@ -256,6 +303,10 @@ export default function PlaylistManager({
   // 執行音訊 / 壓縮檔 / 目錄檔案上傳
   const uploadFiles = async (rawList) => {
     if (!rawList || rawList.length === 0) return;
+    if (uploadingRef.current) {
+      notify('上一批檔案還在上傳中，請等它完成再加入新檔案', 'warning');
+      return;
+    }
     // 只送 mp3 / zip：選資料夾上傳常夾帶 cover.jpg、.DS_Store 等檔案
     const fileList = rawList.filter(isUploadable);
     const skippedLocal = rawList.length - fileList.length;
@@ -264,6 +315,7 @@ export default function PlaylistManager({
       return;
     }
 
+    uploadingRef.current = true;
     try {
       setIsUploading(true);
       setUploadMsg(null);
@@ -322,6 +374,7 @@ export default function PlaylistManager({
     } catch (err) {
       setUploadMsg({ type: 'error', text: `上傳失敗: ${err.message}` });
     } finally {
+      uploadingRef.current = false;
       setIsUploading(false);
       setUploadProgress(null);
     }
@@ -395,7 +448,7 @@ export default function PlaylistManager({
   // 批次移動曲目至目標歌單
   const handleBatchMove = async () => {
     if (!targetPlaylistId) {
-      alert('請先選擇目標歌單');
+      notify('請先選擇目標歌單', 'warning');
       return;
     }
     if (selectedTrackFilenames.length === 0) return;
@@ -420,7 +473,7 @@ export default function PlaylistManager({
       });
 
       if (res.status === 401) {
-        alert('請先以管理員身分登入');
+        notify('請先以管理員身分登入', 'error');
         onRequestLogin?.();
         return;
       }
@@ -429,14 +482,12 @@ export default function PlaylistManager({
       if (res.ok && json.success) {
         setSelectedTrackFilenames([]);
         setTargetPlaylistId('');
-        fetchTracks(selectedId);
-        onRefresh?.();
-        onTracksChanged?.(json.message || '曲目已移動');
+        notifyTracksChanged(json.message || '曲目已移動');
       } else {
-        alert(json.error || '移動歌曲失敗');
+        notify(`移動歌曲失敗: ${json.error || `HTTP ${res.status}`}`, 'error');
       }
     } catch (err) {
-      alert(`網路異常: ${err.message}`);
+      notify(`移動歌曲失敗: ${err.message}`, 'error');
     } finally {
       setIsBatchOperating(false);
     }
@@ -464,7 +515,7 @@ export default function PlaylistManager({
       });
 
       if (res.status === 401) {
-        alert('請先以管理員身分登入後再執行刪除。');
+        notify('請先以管理員身分登入後再執行刪除。', 'error');
         onRequestLogin?.();
         return;
       }
@@ -472,14 +523,12 @@ export default function PlaylistManager({
       const json = await readJson(res);
       if (res.ok && json.success) {
         setSelectedTrackFilenames([]);
-        fetchTracks(selectedId);
-        onRefresh?.();
-        onTracksChanged?.(json.message || '曲目已刪除');
+        notifyTracksChanged(json.message || '曲目已刪除');
       } else {
-        alert(json.error || '刪除歌曲失敗');
+        notify(`刪除歌曲失敗: ${json.error || `HTTP ${res.status}`}`, 'error');
       }
     } catch (err) {
-      alert(`刪除失敗: ${err.message}`);
+      notify(`刪除歌曲失敗: ${err.message}`, 'error');
     } finally {
       setIsBatchOperating(false);
     }

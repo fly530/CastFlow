@@ -58,6 +58,11 @@ export default function UnifiedPlayerCard({
   const mp3StreamUrl = '/stream';
   const waitingTimerRef = useRef(null);
   const lastLogReportTime = useRef(0);
+  // 使用者「想不想聽」。切換串流來源時 <audio> 會被重新載入而停下，
+  // 靠這個判斷載入完要不要自動接著播；耳機／媒體鍵暫停時也會同步改成 false。
+  const wantPlayRef = useRef(false);
+  // 正在換來源 (切 HLS/MP3、重新連線)：部分瀏覽器重新載入時會發出 pause 事件，這段期間不當成使用者暫停
+  const switchingRef = useRef(false);
 
   // 格式化秒數為 mm:ss
   const formatTime = (seconds) => {
@@ -236,7 +241,9 @@ export default function UnifiedPlayerCard({
         audio.load();
         logEvent('INFO', 'NATIVE_HLS_ATTACHED', '使用 Safari/iOS 原生 HLS 解碼器並已啟動預載');
       } else {
-        logEvent('WARN', 'HLS_UNSUPPORTED', '瀏覽器不支援 HLS，建議切換為 Icecast MP3 模式');
+        logEvent('WARN', 'HLS_UNSUPPORTED', '瀏覽器不支援 HLS，自動改用 Icecast MP3');
+        setErrorMsg('此瀏覽器不支援 HLS，已自動改用 Icecast MP3 串流。');
+        setStreamType('mp3');
       }
       return;
     }
@@ -266,6 +273,10 @@ export default function UnifiedPlayerCard({
     hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
       setErrorMsg(null);
       logEvent('INFO', 'MANIFEST_PARSED', `HLS 清單解析完成，共有 ${data.levels?.length || 1} 條串流軌道`);
+      // 從 MP3 切過來、或重新建立 HLS 時，若使用者原本在聽就接著播
+      if (wantPlayRef.current && audio.paused) {
+        audio.play().catch(handlePlayRejected);
+      }
     });
 
     hls.on(Hls.Events.FRAG_LOADED, (event, data) => {
@@ -301,7 +312,9 @@ export default function UnifiedPlayerCard({
           default:
             hls.destroy();
             hlsRef.current = null;
-            setErrorMsg('HLS 串流解析中斷，建議切換下方「Icecast MP3」模式穩定收聽。');
+            logEvent('WARN', 'FALLBACK_TO_MP3', 'HLS 無法復原，自動改用 Icecast MP3');
+            setErrorMsg('HLS 串流無法復原，已自動改用 Icecast MP3 串流。');
+            setStreamType('mp3');
             break;
         }
       } else {
@@ -310,26 +323,38 @@ export default function UnifiedPlayerCard({
     });
   };
 
-  // 初始化音訊播放器 (HLS 或 原生 MP3)
+  // 初始化音訊播放器 (HLS 或 原生 MP3)。切換來源時若使用者正在聽，載入後自動接著播
+  // (原本 MP3 → HLS 會停在暫停狀態，畫面卻還顯示播放中)。
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
     audio.volume = isMuted ? 0 : volume;
+    switchingRef.current = wantPlayRef.current;
 
     if (streamType === 'hls') {
       initHls(audio);
+      // hls.js 會在 MANIFEST_PARSED 接著播；原生 HLS (Safari) 直接播
+      if (wantPlayRef.current && !Hls.isSupported() && audio.canPlayType('application/vnd.apple.mpegurl')) {
+        setIsLoading(true);
+        audio.play().catch(handlePlayRejected);
+      } else if (wantPlayRef.current) {
+        setIsLoading(true);
+      }
     } else {
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
       logEvent('INFO', 'STREAM_SWITCH', `切換為 Icecast 原生 MP3 持續串流 (CBR ${bitrate || 256} kbps)`);
-      if (!audio.src || !audio.src.includes(mp3StreamUrl)) {
+      if (wantPlayRef.current) {
         audio.src = `${mp3StreamUrl}?nocache=${Date.now()}`;
-      }
-      if (isPlaying) {
-        audio.play().catch(() => setIsPlaying(false));
+        setIsLoading(true);
+        audio.play().catch(handlePlayRejected);
+      } else if (audio.getAttribute('src')) {
+        // 沒在聽就不先連 Icecast：MP3 是持續下載的串流，預先連線只會白白佔頻寬
+        audio.removeAttribute('src');
+        audio.load();
       }
     }
 
@@ -373,60 +398,80 @@ export default function UnifiedPlayerCard({
     return () => clearInterval(interval);
   }, [isPlaying, logEvent]);
 
-  // 控制播放與暫停
+  // play() 被拒絕：AbortError 是使用者取消或切換來源造成的，不算錯誤
+  function handlePlayRejected(err) {
+    if (err?.name === 'AbortError') return;
+    switchingRef.current = false;
+    console.warn('Play error:', err);
+    wantPlayRef.current = false;
+    setIsPlaying(false);
+    setIsLoading(false);
+    logEvent('ERROR', 'PLAY_EXCEPTION', `播放啟動失敗: ${err?.message || err}`);
+    setErrorMsg(
+      err?.name === 'NotAllowedError'
+        ? '瀏覽器阻擋了自動播放，請再按一次播放鍵。'
+        : '播放啟動失敗，若持續不穩可切換為「Icecast MP3」模式。'
+    );
+  }
+
+  // 控制播放與暫停。緩衝中 (轉圈圈) 也可以按下取消。
   const togglePlay = async () => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    try {
-      if (isPlaying) {
-        audio.pause();
-        setIsPlaying(false);
-        setIsLoading(false);
-        logEvent('INFO', 'AUDIO_PAUSE', '使用者手動暫停播放');
-      } else {
-        setIsLoading(true);
-        setErrorMsg(null);
-        logEvent('INFO', 'AUDIO_PLAY_REQUEST', `請求開始播放 (${streamType.toUpperCase()})`);
+    if (isPlaying || isLoading) {
+      wantPlayRef.current = false;
+      switchingRef.current = false;
+      audio.pause();
+      if (streamType === 'mp3') {
+        // 斷開 Icecast：暫停後若保留連線，恢復時會先播出暫停前緩衝的舊音訊
+        audio.removeAttribute('src');
+        audio.load();
+      }
+      setIsPlaying(false);
+      setIsLoading(false);
+      logEvent('INFO', 'AUDIO_PAUSE', '使用者手動暫停播放');
+      return;
+    }
 
-        if (streamType === 'hls') {
-          if (Hls.isSupported()) {
-            if (!hlsRef.current) {
-              initHls(audio);
-            } else {
-              // 保持已預載好的緩衝切片，避免呼叫 loadSource() 沖刷掉緩衝
-              hlsRef.current.startLoad();
+    wantPlayRef.current = true;
+    setIsLoading(true);
+    setErrorMsg(null);
+    logEvent('INFO', 'AUDIO_PLAY_REQUEST', `請求開始播放 (${streamType.toUpperCase()})`);
 
-              // 若停留頁面過久才播放，自動校準至最新 Live Edge 避免脫離直播窗口
-              if (audio.seekable && audio.seekable.length > 0) {
-                const liveEnd = audio.seekable.end(audio.seekable.length - 1);
-                if (liveEnd - audio.currentTime > 24) {
-                  audio.currentTime = Math.max(0, liveEnd - 12);
-                }
-              }
-            }
-          } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-            if (!audio.src || !audio.src.includes(hlsStreamUrl)) {
-              audio.src = hlsStreamUrl;
-            }
-          }
+    if (streamType === 'hls') {
+      if (Hls.isSupported()) {
+        if (!hlsRef.current) {
+          initHls(audio);
         } else {
-          if (!audio.src || !audio.src.includes(mp3StreamUrl)) {
-            audio.src = `${mp3StreamUrl}?nocache=${Date.now()}`;
+          // 保持已預載好的緩衝切片，避免呼叫 loadSource() 沖刷掉緩衝
+          hlsRef.current.startLoad();
+
+          // 若停留頁面過久才播放，自動校準至最新 Live Edge 避免脫離直播窗口
+          if (audio.seekable && audio.seekable.length > 0) {
+            const liveEnd = audio.seekable.end(audio.seekable.length - 1);
+            if (liveEnd - audio.currentTime > 24) {
+              audio.currentTime = Math.max(0, liveEnd - 12);
+            }
           }
         }
-
-        await audio.play();
-        setIsPlaying(true);
-        logEvent('INFO', 'AUDIO_PLAY_SUCCESS', '音訊引擎已成功開始輸出聲音');
+      } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
+        if (!audio.src || !audio.src.includes(hlsStreamUrl)) {
+          audio.src = hlsStreamUrl;
+        }
       }
-    } catch (err) {
-      console.warn('Play error:', err);
-      logEvent('ERROR', 'PLAY_EXCEPTION', `播放啟動失敗: ${err.message}`);
-      setErrorMsg('播放暫停或緩衝中，若持續不穩可切換為「Icecast MP3」模式。');
-      setIsPlaying(false);
-    } finally {
+    } else {
+      audio.src = `${mp3StreamUrl}?nocache=${Date.now()}`;
+    }
+
+    try {
+      await audio.play();
+      if (!wantPlayRef.current) return; // 等待期間已被取消
+      setIsPlaying(true);
       setIsLoading(false);
+      logEvent('INFO', 'AUDIO_PLAY_SUCCESS', '音訊引擎已成功開始輸出聲音');
+    } catch (err) {
+      handlePlayRejected(err);
     }
   };
 
@@ -458,6 +503,7 @@ export default function UnifiedPlayerCard({
     setIsLoading(true);
     setErrorMsg(null);
     setAudioDiagnostics((prev) => ({ ...prev, retryCount: prev.retryCount + 1 }));
+    switchingRef.current = wantPlayRef.current;
     logEvent('INFO', 'STREAM_RELOAD', `手動觸發串流重連 (${streamType.toUpperCase()})`);
 
     if (streamType === 'hls') {
@@ -470,8 +516,10 @@ export default function UnifiedPlayerCard({
     } else {
       audio.src = `${mp3StreamUrl}?nocache=${Date.now()}`;
     }
-    if (isPlaying) {
-      audio.play().catch(() => {});
+    if (wantPlayRef.current) {
+      audio.play().catch(handlePlayRejected);
+    } else {
+      setIsLoading(false);
     }
   };
 
@@ -497,6 +545,8 @@ export default function UnifiedPlayerCard({
 
   const handlePlaying = () => {
     if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+    wantPlayRef.current = true; // 媒體鍵／耳機按播放也會走到這裡
+    switchingRef.current = false;
     setIsLoading(false);
     setIsPlaying(true);
     setErrorMsg(null);
@@ -507,10 +557,38 @@ export default function UnifiedPlayerCard({
     logEvent('WARN', 'AUDIO_STALLED', '觸發 HTML5 Audio stalled: 瀏覽器嘗試抓取音訊但網路未及時回應');
   };
 
+  // 耳機拔除、藍牙耳機或鍵盤媒體鍵暫停：<audio> 停了，UI 也要跟著停
+  const handlePause = () => {
+    if (switchingRef.current) return;
+    if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+    wantPlayRef.current = false;
+    setIsPlaying(false);
+    setIsLoading(false);
+  };
+
+  const handleEnded = () => {
+    wantPlayRef.current = false;
+    setIsPlaying(false);
+    setIsLoading(false);
+    logEvent('WARN', 'AUDIO_ENDED', '串流連線已結束');
+    setErrorMsg('串流連線已結束，請按播放鍵重新連線。');
+  };
+
   const handleError = () => {
+    switchingRef.current = false;
+    const err = audioRef.current?.error;
+    // 原生 HLS (canPlayType 說支援) 實際上解不了：自動改用 MP3；原本在聽就由切換流程接著播
+    if (streamType === 'hls' && !hlsRef.current && err?.code === 4) {
+      logEvent('WARN', 'FALLBACK_TO_MP3', '原生 HLS 無法播放 (MEDIA_ERR_SRC_NOT_SUPPORTED)，自動改用 Icecast MP3');
+      setErrorMsg('此瀏覽器無法播放 HLS，已自動改用 Icecast MP3 串流。');
+      setStreamType('mp3');
+      return;
+    }
     setIsLoading(false);
     setIsPlaying(false);
-    const err = audioRef.current?.error;
+    // 暫停 MP3 時會移除 src，那不算錯誤
+    if (!wantPlayRef.current) return;
+    wantPlayRef.current = false;
     const msg = err ? `代碼 ${err.code}: ${err.message || '媒體解碼或網路載入中斷'}` : '串流連線中斷';
     logEvent('ERROR', 'AUDIO_ERROR', msg);
     setErrorMsg('串流伺服器連線中斷，可點選重新整理或切換「Icecast MP3」模式。');
@@ -539,10 +617,11 @@ export default function UnifiedPlayerCard({
         preload="auto"
         onWaiting={handleWaiting}
         onPlaying={handlePlaying}
+        onPause={handlePause}
+        onEnded={handleEnded}
         onStalled={handleStalled}
         onError={handleError}
         onCanPlay={() => {
-          setIsLoading(false);
           logEvent('INFO', 'AUDIO_CANPLAY', '音訊緩衝已滿足起播條件');
         }}
       />
@@ -742,15 +821,23 @@ export default function UnifiedPlayerCard({
             <div className="flex items-center justify-between gap-4 pt-1">
               <div className="flex items-center gap-3.5">
                 {/* 大號撥放/暫停鍵 */}
+                {/* 不再綁 online：排程服務 (Node) 掛掉時 Liquidsoap 仍在輸出，HLS / MP3 都還能聽；
+                    播放中掉線也必須能按暫停 */}
                 <button
                   onClick={togglePlay}
-                  disabled={!online}
-                  className={`w-16 h-16 sm:w-18 sm:h-18 rounded-2xl flex items-center justify-center shadow-xl transition-all transform active:scale-95 ${
-                    online
-                      ? 'bg-gradient-to-tr from-indigo-600 via-purple-600 to-indigo-500 text-white hover:shadow-indigo-500/30 hover:brightness-110 ring-4 ring-indigo-500/20'
-                      : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+                  className={`w-16 h-16 sm:w-18 sm:h-18 rounded-2xl flex items-center justify-center shadow-xl transition-all transform active:scale-95 bg-gradient-to-tr from-indigo-600 via-purple-600 to-indigo-500 text-white hover:shadow-indigo-500/30 hover:brightness-110 ring-4 ${
+                    online || isPlaying ? 'ring-indigo-500/20' : 'ring-slate-700/40 opacity-80'
                   }`}
-                  title={isPlaying ? '暫停播放 (空白鍵)' : '開始收聽 (空白鍵)'}
+                  title={
+                    isPlaying
+                      ? '暫停播放 (空白鍵)'
+                      : isLoading
+                      ? '緩衝中，點擊取消'
+                      : online
+                      ? '開始收聽 (空白鍵)'
+                      : '電台狀態暫時無法取得，仍可嘗試收聽 (空白鍵)'
+                  }
+                  aria-label={isPlaying ? '暫停' : isLoading ? '取消緩衝' : '播放'}
                 >
                   {isLoading ? (
                     <RotateCw className="w-7 h-7 animate-spin" />
