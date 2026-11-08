@@ -809,7 +809,8 @@ router.get('/backups', requireAuth, (req, res) => {
     res.json({
       success: true,
       data: list,
-      backupDir: process.env.BACKUP_DIR ? 'backups' : 'music/backups'
+      // 伺服器 (容器內) 的實際路徑；原本固定回 'backups' / 'music/backups' 兩種字樣，後者根本不存在
+      backupDir: getBackupDir()
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

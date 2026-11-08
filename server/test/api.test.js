@@ -408,6 +408,12 @@ describe('備份下載連結', () => {
     return r;
   };
 
+  test('備份清單回傳伺服器實際的備份目錄 (後台顯示用)', async () => {
+    const r = await api('GET', '/api/backups');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.backupDir, process.env.BACKUP_DIR);
+  });
+
   test('短效連結不用 Authorization header 就能下載，且帶正確的下載檔名', async () => {
     const r = await linkFor(name);
     assert.equal(r.status, 200);

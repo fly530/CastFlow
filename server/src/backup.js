@@ -30,7 +30,7 @@ async function exclusive(label, fn) {
 }
 
 /**
- * 取得備份檔案儲存目錄 (/music/backups)
+ * 取得備份檔案儲存目錄 (compose 內為 /backups)
  */
 export function getBackupDir() {
   const dir = process.env.BACKUP_DIR || path.resolve(process.cwd(), '../backups');
