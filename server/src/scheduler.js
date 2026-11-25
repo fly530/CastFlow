@@ -14,8 +14,11 @@ import { sendTelnetCommand, liquidsoap } from './telnet.js';
 import { icecast } from './icecast.js';
 import { getAudioMetadata, findTrackPathByTitle } from './metadata.js';
 
-let tracksPlayedCount = 0;
-const lastExecutedFixedTimes = new Map(); // scheduleId -> 'YYYY-MM-DD HH:MM' (排定時間點，非實際執行時間)
+const ordinaryTracksByRule = new Map();
+const intervalTracksRemaining = new Map();
+const queuedTrackTypes = new Map();
+let lastCountedRid = null;
+const lastExecutedFixedTimes = new Map(); // scheduleId -> 'YYYY-MM-DD HH:MM:SS' (排定時間點，非實際執行時間)
 const playlistShuffleIndices = new Map(); // playlistId -> { list: [], index: 0 }
 let isAutoDJRunning = false;
 let autoDJTimer = null;
@@ -24,9 +27,9 @@ let currentTrackStartTime = Date.now();
 
 const MUSIC_DIR = process.env.MUSIC_DIR || path.resolve(process.cwd(), '../music');
 
-// 定時規則 (fixed_time / hourly) 錯過排定分鐘時的補播窗口：排定時間起算 2 分鐘內仍會補播。
+// 定時規則 (fixed_time / hourly) 的補播窗口：排定時間起算 2 分鐘內仍會補播。
 // 涵蓋 server 重啟、Telnet 暫時斷線等情況；超過窗口就放棄，避免很久以後才突然插播。
-const CATCHUP_MINUTES = 2;
+const CATCHUP_SECONDS = 120;
 
 const pad2 = (n) => n.toString().padStart(2, '0');
 
@@ -61,10 +64,10 @@ function markScheduleRun(scheduleId, runKey) {
 }
 
 /**
- * 定時規則晚了幾分鐘 (0 = 排定的那一分鐘)；不在補播窗口內回傳 null。
+ * 定時規則晚了幾秒；不在補播窗口內回傳 null。
  * 只處理 fixed_time 與 hourly。
  */
-function getMinutesLate(schedule, now) {
+function getSecondsLate(schedule, now) {
   if (schedule.schedule_type === 'hourly') {
     let targetMinute = 0;
     if (schedule.target_time !== undefined && schedule.target_time !== null) {
@@ -72,27 +75,31 @@ function getMinutesLate(schedule, now) {
       targetMinute = parseInt(cleanMin, 10);
       if (isNaN(targetMinute)) targetMinute = 0;
     }
-    const late = (now.getMinutes() - targetMinute + 60) % 60;
-    return late < CATCHUP_MINUTES ? late : null;
+    if (targetMinute < 0 || targetMinute > 59) return null;
+    const late = (now.getMinutes() * 60 + now.getSeconds() - targetMinute * 60 + 3600) % 3600;
+    return late < CATCHUP_SECONDS ? late : null;
   }
 
   if (schedule.schedule_type === 'fixed_time') {
-    const [h, m] = (schedule.target_time || '').substring(0, 5).split(':').map(Number);
-    if (isNaN(h) || isNaN(m)) return null;
-    const late = now.getHours() * 60 + now.getMinutes() - (h * 60 + m);
-    return late >= 0 && late < CATCHUP_MINUTES ? late : null;
+    const parts = (schedule.target_time || '').split(':').map(Number);
+    const [h, m, s = 0] = parts;
+    if (parts.length < 2 || !Number.isInteger(h) || !Number.isInteger(m) || !Number.isInteger(s) ||
+        h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return null;
+    const late = (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds() -
+      (h * 3600 + m * 60 + s) + 86400) % 86400;
+    return late < CATCHUP_SECONDS ? late : null;
   }
 
   return null;
 }
 
 /**
- * 該次排定時間點的識別字串 'YYYY-MM-DD HH:MM'，用來確保同一個時間點只執行一次。
+ * 該次排定時間點的識別字串 'YYYY-MM-DD HH:MM:SS'，用來確保同一個時間點只執行一次。
  * 以「排定時間」而非「當下時間」為準，補播時才不會被當成新的一次。
  */
 function getTriggerKey(late, now) {
-  const t = new Date(now.getTime() - late * 60000);
-  return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())} ${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
+  const t = new Date(now.getTime() - late * 1000);
+  return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())} ${pad2(t.getHours())}:${pad2(t.getMinutes())}:${pad2(t.getSeconds())}`;
 }
 
 /**
@@ -106,8 +113,9 @@ export function findDueFixedRule(now = new Date()) {
 
   for (const sch of prioritySchedules) {
     if (!isScheduleActiveNow(sch, now)) continue;
-    const key = getTriggerKey(getMinutesLate(sch, now), now);
-    if (getLastRunKey(sch.id) === key) continue;
+    const key = getTriggerKey(getSecondsLate(sch, now), now);
+    const lastKey = getLastRunKey(sch.id);
+    if (lastKey === key || (key.endsWith(':00') && lastKey === key.substring(0, 16))) continue;
 
     const track = getNextTrackFromPlaylist(sch.playlist_id);
     if (!track) {
@@ -155,7 +163,7 @@ export function getPlaylistTracksFromDisk(folderName) {
  */
 export function getNextTrackFromPlaylist(playlistId) {
   const playlist = getPlaylistById(playlistId);
-  if (!playlist) return null;
+  if (!playlist || !playlist.is_active) return null;
 
   const tracks = getPlaylistTracksFromDisk(playlist.folder);
   if (tracks.length === 0) return null;
@@ -206,11 +214,23 @@ export function isTimeInWindow(startTime, endTime, now = new Date()) {
 /**
  * 檢查排程規則於當前時間是否處於生效狀態
  */
-function isScheduleActiveNow(schedule, now = new Date()) {
+export function isScheduleActiveNow(schedule, now = new Date()) {
   if (!schedule.is_active) return false;
 
+  const late = schedule.schedule_type === 'fixed_time' || schedule.schedule_type === 'hourly'
+    ? getSecondsLate(schedule, now) : 0;
+  if (late === null) return false;
+  const scheduledAt = new Date(now.getTime() - late * 1000);
+  const scheduledDate = `${scheduledAt.getFullYear()}-${pad2(scheduledAt.getMonth() + 1)}-${pad2(scheduledAt.getDate())}`;
+  if (schedule.active_from && scheduledDate < schedule.active_from) return false;
+  if (schedule.active_until && scheduledDate > schedule.active_until) return false;
+  const crossesMidnight = !schedule.is_all_day && schedule.start_time && schedule.end_time &&
+    schedule.start_time > schedule.end_time;
+  const dayAt = crossesMidnight && scheduledAt.toTimeString().substring(0, 5) <= schedule.end_time.substring(0, 5)
+    ? new Date(scheduledAt.getTime() - 86400000) : scheduledAt;
+
   // 1. 星期幾檢查 (0: 週日, 1: 週一 ... 6: 週六)
-  const currentDay = now.getDay().toString();
+  const currentDay = dayAt.getDay().toString();
   const allowedDays = (schedule.days_of_week || '0,1,2,3,4,5,6').split(',');
   if (!allowedDays.includes(currentDay)) {
     return false;
@@ -226,13 +246,13 @@ function isScheduleActiveNow(schedule, now = new Date()) {
   if (schedule.schedule_type === 'hourly') {
     // 檢查時段區間 (例如 11:00 ~ 22:00 或全天)
     if (!schedule.is_all_day && schedule.start_time && schedule.end_time) {
-      if (!isTimeInWindow(schedule.start_time, schedule.end_time, now)) {
+      if (!isTimeInWindow(schedule.start_time, schedule.end_time, scheduledAt)) {
         return false;
       }
     }
 
     // 檢查分鐘數 (例如 30 表示每小時第 30 分)；錯過時在補播窗口內仍算到點
-    return getMinutesLate(schedule, now) !== null;
+    return true;
   }
 
   if (schedule.schedule_type === 'interval') {
@@ -244,11 +264,10 @@ function isScheduleActiveNow(schedule, now = new Date()) {
   if (schedule.schedule_type === 'fixed_time') {
     // 若有指定單次日期
     if (schedule.target_date) {
-      const currentDateStr = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
-      if (schedule.target_date !== currentDateStr) return false;
+      if (schedule.target_date !== scheduledDate) return false;
     }
 
-    return getMinutesLate(schedule, now) !== null;
+    return true;
   }
 
   return false;
@@ -261,42 +280,12 @@ export function decideNextTrack() {
   const now = new Date();
   const allSchedules = getAllSchedules();
 
-  // 1. 優先檢查：精確指定時間 (fixed_time) 與每小時整點/定分插播 (hourly)
-  const due = findDueFixedRule(now);
-  if (due) {
-    markScheduleRun(due.sch.id, due.key);
-    tracksPlayedCount++;
-    return {
-      track: due.track,
-      playlistId: due.sch.playlist_id,
-      schedule: due.sch,
-      reason: due.sch.schedule_type,
-      interruptMode: due.sch.interrupt_mode
-    };
-  }
-
-  // 2. 次要檢查：間隔插播 (interval - 每 X 首播 Y 首)
-  const intervalSchedules = allSchedules.filter((s) => s.schedule_type === 'interval' && s.interval_every_tracks > 0);
-  for (const sch of intervalSchedules) {
-    if (isScheduleActiveNow(sch, now)) {
-      if (tracksPlayedCount > 0 && tracksPlayedCount % sch.interval_every_tracks === 0) {
-        const track = getNextTrackFromPlaylist(sch.playlist_id);
-        if (track) {
-          tracksPlayedCount++;
-          return {
-            track,
-            playlistId: sch.playlist_id,
-            schedule: sch,
-            reason: 'interval',
-            interruptMode: 'wait_track_end'
-          };
-        }
-      }
-    }
-  }
-
-  // 3. 常規輪播：依輪播權重 (Weights) 進行加權隨機抽選
-  const activeContinuous = allSchedules.filter((s) => s.schedule_type === 'continuous' && isScheduleActiveNow(s, now));
+  // 常規輪播：只有啟用且有曲目的歌單參與抽選。
+  const activeContinuous = allSchedules.filter((s) => {
+    if (s.schedule_type !== 'continuous' || !isScheduleActiveNow(s, now)) return false;
+    const playlist = getPlaylistById(s.playlist_id);
+    return playlist?.is_active && getPlaylistTracksFromDisk(playlist.folder).length > 0;
+  });
 
   if (activeContinuous.length > 0) {
     // 計算總權重池
@@ -315,7 +304,6 @@ export function decideNextTrack() {
 
     const track = getNextTrackFromPlaylist(selectedSchedule.playlist_id);
     if (track) {
-      tracksPlayedCount++;
       return {
         track,
         playlistId: selectedSchedule.playlist_id,
@@ -326,12 +314,11 @@ export function decideNextTrack() {
     }
   }
 
-  // 4. 若皆無符合，隨機自 A 歌單或第一個有檔案的歌單保底
+  // 若皆無符合，自第一個有檔案的啟用歌單保底
   const allPlaylists = getAllPlaylists().filter((p) => p.is_active);
   for (const pl of allPlaylists) {
     const track = getNextTrackFromPlaylist(pl.id);
     if (track) {
-      tracksPlayedCount++;
       return {
         track,
         playlistId: pl.id,
@@ -356,18 +343,22 @@ export async function pushTrackToLiquidsoap(trackPathOrDecision, interruptMode =
     const isDecisionObj = typeof trackPathOrDecision === 'object' && trackPathOrDecision.track;
     const trackPath = isDecisionObj ? trackPathOrDecision.track.fullPath : trackPathOrDecision;
     const filename = isDecisionObj ? trackPathOrDecision.track.filename : path.basename(trackPath);
+    const reason = isDecisionObj ? trackPathOrDecision.reason : 'manual';
+    const queueName = ['fixed_time', 'hourly', 'interval', 'manual'].includes(reason)
+      ? 'priority_queue' : 'dynamic_queue';
 
-    // flush_and_skip 會清空整個佇列，必須在 push 之前執行，
-    // 否則剛推入的插播曲目也會一起被清掉 (佇列變空 → 退回 A 歌單隨機輪播)
-    if (interruptMode === 'immediate_fade') {
-      await sendTelnetCommand('dynamic_queue.flush_and_skip');
-      plannedQueue = [];
-      console.log(`[Scheduler] Triggered immediate fade skip.`);
-    }
-
-    const pushCmd = `dynamic_queue.push ${trackPath}`;
+    const pushCmd = `${queueName}.push ${trackPath}`;
     const pushRes = await sendTelnetCommand(pushCmd);
     const rid = pushRes.replace(/END/g, '').trim();
+    if (!/^\d+$/.test(rid)) throw new Error(`Invalid request id: ${pushRes}`);
+    queuedTrackTypes.set(rid, reason);
+    if (interruptMode === 'immediate_fade') {
+      try {
+        await sendTelnetCommand('radio.skip');
+      } catch (err) {
+        logThrottled('immediate-skip', `[Scheduler] 插播已入隊，但立即切歌失敗: ${err.message}`);
+      }
+    }
     console.log(`[Scheduler] Pushed track: ${trackPath} -> RID ${rid}`);
 
     const meta = await getAudioMetadata(trackPath).catch(() => null);
@@ -379,6 +370,7 @@ export async function pushTrackToLiquidsoap(trackPathOrDecision, interruptMode =
 
     const queuedItem = {
       rid,
+      queueName,
       filename,
       fullPath: trackPath,
       title: meta?.title || filename.replace(/\.mp3$/i, ''),
@@ -422,15 +414,18 @@ export async function checkAndFeedQueue() {
 
 async function feedQueueOnce() {
   try {
-    // 查詢當前佇列長度 (以空格解析 RID 陣列)
+    // 分別讀取兩條佇列；插播佇列在 Liquidsoap 中優先於一般待播佇列。
+    const priorityOutput = await sendTelnetCommand('priority_queue.queue');
+    const priorityRids = priorityOutput.replace(/END/g, '').trim().split(/\s+/).filter(Boolean);
     const queueOutput = await sendTelnetCommand('dynamic_queue.queue');
     const currentRids = queueOutput.replace(/END/g, '').trim().split(/\s+/).filter(Boolean);
+    const allRids = [...priorityRids, ...currentRids];
 
     // 同步 plannedQueue：僅保留仍在 Liquidsoap 待播佇列中的項目
-    plannedQueue = plannedQueue.filter((item) => currentRids.includes(item.rid));
+    plannedQueue = plannedQueue.filter((item) => allRids.includes(item.rid));
 
     // 若 plannedQueue 缺少某些已在 Liquidsoap 待播中的 RID (例如伺服器重啟時)，主動向 Liquidsoap 查回元資料補全
-    for (const rid of currentRids) {
+    for (const rid of allRids) {
       if (!plannedQueue.some((item) => item.rid === rid)) {
         try {
           const metaRes = await sendTelnetCommand(`request.metadata ${rid}`);
@@ -444,6 +439,7 @@ async function feedQueueOnce() {
             const playlist = allPlaylists.find((p) => p.folder === folderName);
             plannedQueue.push({
               rid,
+              queueName: priorityRids.includes(rid) ? 'priority_queue' : 'dynamic_queue',
               filename,
               fullPath,
               title: meta?.title || filename.replace(/\.mp3$/i, ''),
@@ -461,6 +457,7 @@ async function feedQueueOnce() {
         }
       }
     }
+    plannedQueue.sort((a, b) => allRids.indexOf(a.rid) - allRids.indexOf(b.rid));
 
     // 優先檢查是否有到點定時插播 (fixed_time 或 hourly)；錯過排定分鐘時會在補播窗口內補上
     const due = findDueFixedRule(new Date());
@@ -475,12 +472,30 @@ async function feedQueueOnce() {
       if (rid) {
         // 推送成功才標記已執行；失敗則留在補播窗口內，下一輪巡檢重試
         markScheduleRun(due.sch.id, due.key);
-        tracksPlayedCount++;
         console.log(`[Scheduler] 觸發定時規則「${due.sch.title}」(${due.key}, ${due.sch.interrupt_mode})`);
       } else {
         logThrottled(`push-${due.sch.id}-${due.key}`, `[Scheduler] 定時規則「${due.sch.title}」推送失敗，將於補播窗口內重試`, 10000);
       }
       return;
+    }
+
+    // 每播完 X 首一般曲目後，將 Y 首插播排入優先佇列。
+    for (const sch of getAllSchedules()) {
+      let remaining = intervalTracksRemaining.get(sch.id) || 0;
+      if (!isScheduleActiveNow(sch) || !getPlaylistById(sch.playlist_id)?.is_active) {
+        ordinaryTracksByRule.delete(sch.id);
+        intervalTracksRemaining.delete(sch.id);
+        continue;
+      }
+      if (!remaining) continue;
+      while (remaining > 0) {
+        const track = getNextTrackFromPlaylist(sch.playlist_id);
+        if (!track) break;
+        const rid = await pushTrackToLiquidsoap({ track, playlistId: sch.playlist_id, schedule: sch, reason: 'interval' });
+        if (!rid) break;
+        remaining--;
+      }
+      intervalTracksRemaining.set(sch.id, remaining);
     }
 
     // 當佇列待播少於 3 首時，才調用決策引擎逐首補充至 3 首
@@ -513,8 +528,8 @@ export async function skipCurrentTrack() {
       }
     }
 
-    // 透過 dynamic_queue.skip 觸發平滑淡出轉場 (絕不直接切斷輸出端)
-    const skipRes = await sendTelnetCommand('dynamic_queue.skip');
+    // 透過目前選取的來源切歌，讓優先佇列也能正確處理手動跳播。
+    const skipRes = await sendTelnetCommand('radio.skip');
     currentPlayingTitle = null;
     console.log(`[Scheduler] Smoothly skipped current track via dynamic_queue: ${skipRes}`);
 
@@ -575,11 +590,40 @@ export function recordNowPlaying(meta) {
   return true;
 }
 
+export function countStartedTrack(meta, now = new Date()) {
+  const rid = meta?.rid?.toString();
+  if (!rid || rid === lastCountedRid) return;
+  lastCountedRid = rid;
+  const reason = queuedTrackTypes.get(rid);
+  queuedTrackTypes.delete(rid);
+  if (reason !== 'continuous' && reason !== 'fallback') return;
+
+  for (const sch of getAllSchedules()) {
+    if (sch.schedule_type !== 'interval') continue;
+    if (!isScheduleActiveNow(sch, now) || !getPlaylistById(sch.playlist_id)?.is_active) {
+      ordinaryTracksByRule.delete(sch.id);
+      intervalTracksRemaining.delete(sch.id);
+      continue;
+    }
+    const every = Number(sch.interval_every_tracks);
+    if (!Number.isInteger(every) || every < 1) continue;
+    const count = (ordinaryTracksByRule.get(sch.id) || 0) + 1;
+    if (count >= every) {
+      ordinaryTracksByRule.set(sch.id, 0);
+      intervalTracksRemaining.set(sch.id, Math.max(1, Number(sch.interval_play_tracks) || 1));
+    } else {
+      ordinaryTracksByRule.set(sch.id, count);
+    }
+  }
+}
+
 async function pollNowPlaying() {
   if (isPollingNowPlaying || !liquidsoap.isConnected) return;
   isPollingNowPlaying = true;
   try {
-    recordNowPlaying(await liquidsoap.getMetadata());
+    const meta = await liquidsoap.getMetadata();
+    countStartedTrack(meta);
+    recordNowPlaying(meta);
   } catch (err) {
     logThrottled('history-error', `[Scheduler] 記錄播放歷史失敗: ${err.message}`);
   } finally {
@@ -602,8 +646,8 @@ function maybePruneHistory() {
 }
 
 async function autoDJTick() {
-  await checkAndFeedQueue();
   await pollNowPlaying();
+  await checkAndFeedQueue();
   maybePruneHistory();
 }
 
@@ -636,7 +680,11 @@ export async function getUpcomingTracks(count = 3) {
       await checkAndFeedQueue();
     }
 
-    return plannedQueue.slice(0, count).map((item, idx) => ({
+    const ordered = [...plannedQueue].sort((a, b) => {
+      if (a.queueName !== b.queueName) return a.queueName === 'priority_queue' ? -1 : 1;
+      return plannedQueue.indexOf(a) - plannedQueue.indexOf(b);
+    });
+    return ordered.slice(0, count).map((item, idx) => ({
       order: idx + 1,
       playlistId: item.playlistId,
       playlistName: item.playlistName,

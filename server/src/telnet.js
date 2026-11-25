@@ -174,6 +174,7 @@ export class LiquidsoapClient extends EventEmitter {
             }
           }
           if (meta.title || meta.filename) {
+            meta.rid = rid;
             return meta;
           }
         }
@@ -233,7 +234,7 @@ export class LiquidsoapClient extends EventEmitter {
    * 跳至下一首歌曲 (平滑淡出轉場，避免輸出硬切斷爆音)
    */
   async skip() {
-    return await this.sendCommand('dynamic_queue.skip');
+    return await this.sendCommand('radio.skip');
   }
 
   /**

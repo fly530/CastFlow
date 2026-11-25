@@ -31,13 +31,14 @@ hls_dir      = environment.get(default="/output/hls", "HLS_DIR")
 # 所有業務排程 (權重輪播、整點插播、閉店前倒數、間隔插播) 皆由 SQLite 資料庫
 # 與後端 Node.js AutoDJ 智慧排程器統一決策，並透過 Telnet 推送至此佇列。
 dynamic_queue = request.queue(id="dynamic_queue")
+priority_queue = request.queue(id="priority_queue")
 
 # 4. 保底安全音訊源 (Safety Fallback)
 # 當 Node.js 伺服器冷啟動、重啟或佇列短暫為空時自動接管，防止電台斷流空轉。
 fallback_stream = playlist(id="fallback_stream", reload_mode="watch", mode="randomize", "#{music_dir}/A")
 
 # 混合排程：優先播放動態佇列，若隊列為空自動無縫切換至保底音源
-mixed_stream = fallback(track_sensitive=true, [dynamic_queue, fallback_stream])
+mixed_stream = fallback(track_sensitive=true, [priority_queue, dynamic_queue, fallback_stream])
 
 # 5. 平滑淡入淡出轉場 (crossfade with smooth envelope & anti-clipping)
 faded_stream = crossfade(
@@ -62,8 +63,8 @@ final_radio = mksafe(limited_radio)
 # 6. 自訂註冊 Telnet 指令 (提供後端管理面板查詢與調用)
 server.register(namespace="radio", description="取得廣播伺服器運作狀態", "status", fun (_) -> "ALIVE")
 server.register(namespace="radio", description="平滑淡出切換至下一首曲目 (無爆音)", "skip", fun (_) -> begin
-  dynamic_queue.skip()
-  "OK: Skipped dynamic queue"
+  mixed_stream.skip()
+  "OK: Skipped current track"
 end)
 server.register(namespace="radio", description="強制重新載入保底歌單資料夾", "reload_all", fun (_) -> begin
   fallback_stream.reload()

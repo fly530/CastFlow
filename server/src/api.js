@@ -655,7 +655,7 @@ router.post('/schedules', requireAuth, (req, res) => {
     const created = createSchedule(req.body);
     res.json({ success: true, message: '排程已成功建立', data: created });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err instanceof RangeError ? 400 : 500).json({ success: false, error: err.message });
   }
 });
 
@@ -670,7 +670,7 @@ router.put('/schedules/:id', requireAuth, (req, res) => {
     }
     res.json({ success: true, message: '排程已更新', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err instanceof RangeError ? 400 : 500).json({ success: false, error: err.message });
   }
 });
 

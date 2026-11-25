@@ -9,10 +9,10 @@ import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
-const { LiquidsoapClient } = await import(`${SRC}/telnet.js`);
+const { LiquidsoapClient } = await import(pathToFileURL(path.join(SRC, 'telnet.js')).href);
 
 const cleanups = [];
 afterEach(async () => {

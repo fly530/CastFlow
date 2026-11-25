@@ -76,6 +76,8 @@ export function initDatabase() {
       end_time TEXT,
       target_time TEXT,
       target_date TEXT,
+      active_from TEXT,
+      active_until TEXT,
       interrupt_mode TEXT DEFAULT 'wait_track_end',
       weight INTEGER DEFAULT 1,
       interval_every_tracks INTEGER DEFAULT 4,
@@ -85,6 +87,11 @@ export function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // 既有資料庫原地升級；未設定日期的舊規則維持永久生效。
+  const scheduleColumns = new Set(database.pragma('table_info(playlist_schedules)').map((column) => column.name));
+  if (!scheduleColumns.has('active_from')) database.exec('ALTER TABLE playlist_schedules ADD COLUMN active_from TEXT');
+  if (!scheduleColumns.has('active_until')) database.exec('ALTER TABLE playlist_schedules ADD COLUMN active_until TEXT');
 
   // 定時規則「最近一次已執行」的紀錄。伺服器重啟後據此避免同一時間點重播，
   // 也讓補播機制 (錯過整點的 1~2 分鐘內補上) 不會變成重複播放。
@@ -349,6 +356,25 @@ export function deletePlaylist(id) {
 // ==========================================
 // 排程規則 (Schedules) CRUD
 // ==========================================
+function normalizeScheduleDate(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new RangeError(`${field} 必須為 YYYY-MM-DD 日期`);
+  }
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    throw new RangeError(`${field} 不是有效日期`);
+  }
+  return value;
+}
+
+function validateScheduleDateRange(activeFrom, activeUntil) {
+  const from = normalizeScheduleDate(activeFrom, '開始日期');
+  const until = normalizeScheduleDate(activeUntil, '結束日期');
+  if (from && until && from > until) throw new RangeError('結束日期不得早於開始日期');
+  return { active_from: from, active_until: until };
+}
+
 export function getAllSchedules() {
   const database = getDatabase();
   return database.prepare(`
@@ -383,14 +409,15 @@ export function getScheduleById(id) {
 
 export function createSchedule(data) {
   const database = getDatabase();
+  const dateRange = validateScheduleDateRange(data.active_from, data.active_until);
   const stmt = database.prepare(`
     INSERT INTO playlist_schedules (
       playlist_id, title, schedule_type, days_of_week, is_all_day,
-      start_time, end_time, target_time, target_date, interrupt_mode,
+      start_time, end_time, target_time, target_date, active_from, active_until, interrupt_mode,
       weight, interval_every_tracks, interval_play_tracks, priority, is_active
     ) VALUES (
       @playlist_id, @title, @schedule_type, @days_of_week, @is_all_day,
-      @start_time, @end_time, @target_time, @target_date, @interrupt_mode,
+      @start_time, @end_time, @target_time, @target_date, @active_from, @active_until, @interrupt_mode,
       @weight, @interval_every_tracks, @interval_play_tracks, @priority, 1
     )
   `);
@@ -404,6 +431,7 @@ export function createSchedule(data) {
     end_time: data.end_time || null,
     target_time: data.target_time || null,
     target_date: data.target_date || null,
+    ...dateRange,
     interrupt_mode: data.interrupt_mode || 'wait_track_end',
     weight: Number(data.weight) || 1,
     interval_every_tracks: Number(data.interval_every_tracks) || 0,
@@ -415,17 +443,23 @@ export function createSchedule(data) {
 
 export function updateSchedule(id, data) {
   const database = getDatabase();
+  const current = getScheduleById(id);
+  if (!current) return null;
+  const dateRange = validateScheduleDateRange(
+    data.active_from !== undefined ? data.active_from : current.active_from,
+    data.active_until !== undefined ? data.active_until : current.active_until
+  );
   const fields = [];
   const params = [];
   const allowed = [
     'title', 'playlist_id', 'schedule_type', 'days_of_week', 'is_all_day',
-    'start_time', 'end_time', 'target_time', 'target_date', 'interrupt_mode',
+    'start_time', 'end_time', 'target_time', 'target_date', 'active_from', 'active_until', 'interrupt_mode',
     'weight', 'interval_every_tracks', 'interval_play_tracks', 'priority', 'is_active'
   ];
   for (const [key, value] of Object.entries(data)) {
     if (allowed.includes(key)) {
       fields.push(`${key} = ?`);
-      params.push(value);
+      params.push(key === 'active_from' || key === 'active_until' ? dateRange[key] : value);
     }
   }
   if (fields.length === 0) return getScheduleById(id);
@@ -471,15 +505,16 @@ export function restorePlaylistsAndSchedules(playlists, schedules) {
     const insertSch = database.prepare(`
       INSERT INTO playlist_schedules (
         playlist_id, title, schedule_type, days_of_week, is_all_day,
-        start_time, end_time, target_time, target_date, interrupt_mode,
+        start_time, end_time, target_time, target_date, active_from, active_until, interrupt_mode,
         weight, interval_every_tracks, interval_play_tracks, priority, is_active
       ) VALUES (
         @playlist_id, @title, @schedule_type, @days_of_week, @is_all_day,
-        @start_time, @end_time, @target_time, @target_date, @interrupt_mode,
+        @start_time, @end_time, @target_time, @target_date, @active_from, @active_until, @interrupt_mode,
         @weight, @interval_every_tracks, @interval_play_tracks, @priority, @is_active
       )
     `);
     for (const sch of schs) {
+      const dateRange = validateScheduleDateRange(sch.active_from, sch.active_until);
       insertSch.run({
         playlist_id: sch.playlist_id,
         title: sch.title || '排程規則',
@@ -490,6 +525,7 @@ export function restorePlaylistsAndSchedules(playlists, schedules) {
         end_time: sch.end_time || null,
         target_time: sch.target_time || null,
         target_date: sch.target_date || null,
+        ...dateRange,
         interrupt_mode: sch.interrupt_mode || 'wait_track_end',
         weight: Number(sch.weight) || 1,
         interval_every_tracks: Number(sch.interval_every_tracks) || 0,

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
 
@@ -29,13 +29,14 @@ before(async () => {
   process.env.JWT_SECRET = 'x'.repeat(64);
   for (const d of ['music', 'data', 'backups']) fs.mkdirSync(path.join(tmp, d), { recursive: true });
 
-  db = await import(`${SRC}/db.js`);
+  db = await import(pathToFileURL(path.join(SRC, 'db.js')).href);
   db.initDatabase();
   db.createPlaylist({ id: 'T1', name: '測試歌單', folder: 'TF', color: '#000', play_mode: 'sequential', transition: 'smart' });
-  scheduler = await import(`${SRC}/scheduler.js`);
+  scheduler = await import(pathToFileURL(path.join(SRC, 'scheduler.js')).href);
 });
 
 after(() => {
+  db?.getDatabase().close();
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 

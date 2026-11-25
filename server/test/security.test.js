@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
 
@@ -31,13 +31,13 @@ before(async () => {
   process.env.JWT_SECRET = 'x'.repeat(64);
   for (const d of ['music', 'data', 'backups']) fs.mkdirSync(path.join(tmp, d), { recursive: true });
 
-  playlists = await import(`${SRC}/playlists.js`);
-  db = await import(`${SRC}/db.js`);
-  auth = await import(`${SRC}/auth.js`);
+  playlists = await import(pathToFileURL(path.join(SRC, 'playlists.js')).href);
+  db = await import(pathToFileURL(path.join(SRC, 'db.js')).href);
+  auth = await import(pathToFileURL(path.join(SRC, 'auth.js')).href);
   db.initDatabase();
 
   const express = (await import('express')).default;
-  const { router } = await import(`${SRC}/api.js`);
+  const { router } = await import(pathToFileURL(path.join(SRC, 'api.js')).href);
   const app = express();
   app.use(express.json());
   app.use('/api', router);
@@ -47,8 +47,9 @@ before(async () => {
   token = auth.signJwtToken({ id: 1, username: 'admin' });
 });
 
-after(() => {
-  server?.close();
+after(async () => {
+  if (server) await new Promise((resolve) => server.close(resolve));
+  db?.getDatabase().close();
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -69,7 +70,7 @@ describe('① 命令注入', () => {
 
   test('execFileSync 不展開 shell metacharacter', () => {
     const evil = '/music/A/$(echo INJECTED).zip';
-    const out = execFileSync('/bin/echo', [evil]).toString().trim();
+    const out = execFileSync(process.execPath, ['-e', 'process.stdout.write(process.argv[1])', evil]).toString();
     assert.equal(out, evil);
     assert.ok(!out.includes('INJECTED\n') && out.includes('$('), '指令替換被展開了');
   });
