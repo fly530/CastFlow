@@ -259,6 +259,13 @@ export default function ScheduleManager({
                     <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-400 flex-wrap">
                       <span className="flex items-center gap-1">
                         <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                        {sch.active_from || sch.active_until
+                          ? `${sch.active_from || '不限起日'} ~ ${sch.active_until || '不限迄日'}`
+                          : '永久生效'}
+                      </span>
+                      <span className="text-slate-700">•</span>
+                      <span className="flex items-center gap-1">
+                        <Calendar className="w-3.5 h-3.5 text-slate-500" />
                         <span>{formatDays(sch.days_of_week)}</span>
                       </span>
 

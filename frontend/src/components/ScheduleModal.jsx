@@ -23,6 +23,8 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
   const [targetTime, setTargetTime] = useState('21:30:00');
   const [hourlyMinute, setHourlyMinute] = useState(0);
   const [targetDate, setTargetDate] = useState('');
+  const [activeFrom, setActiveFrom] = useState('');
+  const [activeUntil, setActiveUntil] = useState('');
   const [interruptMode, setInterruptMode] = useState('wait_track_end');
   const [weight, setWeight] = useState(1);
   const [intervalEveryTracks, setIntervalEveryTracks] = useState(4);
@@ -51,6 +53,8 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
         setHourlyMinute(0);
       }
       setTargetDate(editingSchedule.target_date || '');
+      setActiveFrom(editingSchedule.active_from || '');
+      setActiveUntil(editingSchedule.active_until || '');
       setInterruptMode(editingSchedule.interrupt_mode || 'wait_track_end');
       setWeight(editingSchedule.weight || 1);
       setIntervalEveryTracks(editingSchedule.interval_every_tracks || 4);
@@ -70,6 +74,8 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
       setTargetTime('21:30:00');
       setHourlyMinute(0);
       setTargetDate('');
+      setActiveFrom('');
+      setActiveUntil('');
       setInterruptMode('wait_track_end');
       setWeight(1);
       setIntervalEveryTracks(4);
@@ -127,6 +133,10 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
       setErrorMsg('請選擇對應歌單');
       return;
     }
+    if (activeFrom && activeUntil && activeFrom > activeUntil) {
+      setErrorMsg('結束日期不得早於開始日期');
+      return;
+    }
 
     try {
       setIsSaving(true);
@@ -149,6 +159,8 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
         end_time: !isAllDay ? (endTime ? endTime.substring(0, 5) : null) : null,
         target_time: finalTargetTime,
         target_date: scheduleType === 'fixed_time' && targetDate ? targetDate : null,
+        active_from: activeFrom || null,
+        active_until: activeUntil || null,
         interrupt_mode: interruptMode,
         weight: Number(weight),
         interval_every_tracks: Number(intervalEveryTracks),
@@ -301,6 +313,24 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
               >
                 指定時間 (Fixed Time)
               </button>
+            </div>
+          </div>
+
+          {/* 生效日期區間 */}
+          <div className="p-4 rounded-2xl bg-slate-950/40 border border-slate-800/60">
+            <label className="block text-xs font-semibold text-slate-200 mb-1">生效日期區間</label>
+            <p className="text-[11px] text-slate-400 mb-3">留空代表不限制日期；起訖日期當天都包含在內。可只設定其中一端。已排入待播佇列的歌曲仍會播完。</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">開始日期</label>
+                <input type="date" value={activeFrom} onChange={(e) => setActiveFrom(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-100 focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">結束日期</label>
+                <input type="date" value={activeUntil} onChange={(e) => setActiveUntil(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-100 focus:border-purple-500" />
+              </div>
             </div>
           </div>
 
@@ -595,7 +625,7 @@ export default function ScheduleModal({ isOpen, onClose, editingSchedule, playli
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-200 mb-1">
-                    單次指定日期 (選填)
+                    單次指定日期 (選填，須同時符合生效區間)
                   </label>
                   <input
                     type="date"

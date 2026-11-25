@@ -96,6 +96,7 @@ Playlists A through G are preconfigured with intuitive roles:
 | **`/music/G`** | Late Night Relaxing Stream | 22:00 ~ 23:00 rotated with Playlist A at **1:1 ratio** |
 
 * General rule: Playlists load in randomized/shuffle mode. All track transitions are protected by broadcast-grade smooth crossfading.
+* Every schedule can have an inclusive start and end date. Leave both blank for no date limit, or set either bound alone. Dates use the server container's local time zone and combine with weekday and time-window conditions. Tracks already queued continue playing.
 
 ---
 
