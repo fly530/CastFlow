@@ -12,7 +12,7 @@ import {
   RefreshCw,
   MoreHorizontal
 } from 'lucide-react';
-import { authFetch } from '../utils/api.js';
+import { authFetch, readJson } from '../utils/api.js';
 
 const DAY_LABELS = {
   '0': '日',
@@ -60,14 +60,14 @@ export default function ScheduleManager({
     try {
       setIsLoading(true);
       const res = await fetch('/api/schedules');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success) {
-          setSchedules(json.data || []);
-        }
+      const json = await readJson(res);
+      if (res.ok && json.success) {
+        setSchedules(json.data || []);
+      } else {
+        showToast?.(`讀取排程清單失敗: ${json.error || `HTTP ${res.status}`}`, 'error');
       }
     } catch (err) {
-      console.error('Failed to load schedules:', err);
+      showToast?.(`讀取排程清單失敗: ${err.message}`, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -91,11 +91,13 @@ export default function ScheduleManager({
         return;
       }
 
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         showToast?.(`已${schedule.is_active ? '停用' : '啟用'}「${schedule.title}」`);
         fetchSchedules();
         onScheduleChanged?.();
+      } else {
+        showToast?.(`${schedule.is_active ? '停用' : '啟用'}失敗: ${json.error || `HTTP ${res.status}`}`, 'error');
       }
     } catch (err) {
       showToast?.(`操作失敗: ${err.message}`, 'error');
@@ -118,10 +120,13 @@ export default function ScheduleManager({
         return;
       }
 
-      if (res.ok) {
+      const json = await readJson(res);
+      if (res.ok && json.success !== false) {
         showToast?.(`已刪除「${schedule.title}」`);
         fetchSchedules();
         onScheduleChanged?.();
+      } else {
+        showToast?.(`刪除失敗: ${json.error || `HTTP ${res.status}`}`, 'error');
       }
     } catch (err) {
       showToast?.(`刪除異常: ${err.message}`, 'error');
@@ -129,6 +134,15 @@ export default function ScheduleManager({
   };
 
   const handleTriggerNow = async (schedule) => {
+    // 淡出插播會立刻切掉正在播出的歌，按錯就是一次播出事故：先確認
+    if (
+      schedule.interrupt_mode === 'immediate_fade' &&
+      !window.confirm(
+        `「${schedule.title}」設定為淡出插播：會立即切斷目前正在播出的歌曲，改播「${schedule.playlist_name || schedule.playlist_id}」。\n\n確定要現在插播嗎？`
+      )
+    ) {
+      return;
+    }
     try {
       setTriggeringId(schedule.id);
       const res = await authFetch(`/api/schedules/${schedule.id}/trigger`, {
@@ -141,7 +155,7 @@ export default function ScheduleManager({
         return;
       }
 
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         showToast?.(json.message || '已成功插播！');
         onScheduleChanged?.();
@@ -271,6 +285,11 @@ export default function ScheduleManager({
                   <button
                     onClick={() => handleTriggerNow(sch)}
                     disabled={triggeringId === sch.id}
+                    title={
+                      sch.interrupt_mode === 'immediate_fade'
+                        ? '立即切斷目前歌曲並插播 (會先確認)'
+                        : '排入插播佇列，目前歌曲播完後播出'
+                    }
                     className="flex min-h-10 items-center gap-2 rounded-xl border border-purple-500/30 bg-purple-500/10 px-3 text-sm font-medium text-purple-200 transition-colors hover:bg-purple-500/20 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-400"
                   >
                     <Play className="size-4" />

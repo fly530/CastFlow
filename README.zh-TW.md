@@ -153,6 +153,8 @@ docker logs castflow-server | grep -E "Password|admin"
 
 1. 以本 repo 建立 Komodo Stack，**File Paths** 填 `compose.komodo.yaml`。
 2. Stack 的 **Environment** 填 `JWT_SECRET`、`ICECAST_SOURCE_PASSWORD`、`ICECAST_ADMIN_PASSWORD`、`CASTFLOW_HOST`、`CASTFLOW_DATA_DIR`（範本見 `.env.example`）。
+   選填 `TRUST_PROXY`：伺服器相信哪些代理的 `X-Forwarded-For`（登入限流與日誌靠它取得聽眾 IP）。
+   留空 = 只信任私有網段，gateway 與 Traefik 都涵蓋在內；前面還有一層公網代理（例如 Cloudflare）時，填它的網段或跳數，例如 `2`。
 3. GHCR 套件若是私有，Stack 的 Image Registry 設 `ghcr.io`（PAT 只需 `read:packages`）。
 4. 開 **Poll for Updates** + **Auto Update**。
 5. 要回滾：在 Stack 的 Environment 加 `CASTFLOW_SERVER_TAG=sha-<短碼>`（gateway 用 `CASTFLOW_GATEWAY_TAG`）再按 Deploy；
@@ -163,7 +165,10 @@ docker logs castflow-server | grep -E "Password|admin"
 ## 排程的執行依賴
 
 排程判斷全部在後端 Node.js 的 AutoDJ 排程器（每 5 秒一次），透過 Telnet 推送至
-Liquidsoap 的 `dynamic_queue`；`radio.liq` 本身只負責播放佇列與轉場，不含任何時段邏輯。
+Liquidsoap：一般輪播進 `dynamic_queue`（預排約 3 首），整點／定時插播進 `priority_queue`，
+當前曲目一結束就優先播出。`radio.liq` 本身只負責播放佇列與轉場，不含任何時段邏輯。
+更新 `radio.liq` 後要重啟 liquidsoap 容器（`docker compose restart liquidsoap`），
+在那之前插播會退回排在 `dynamic_queue` 尾端。
 這確保後台改排程立即生效、不需重載 Liquidsoap。
 
 代價是 **`server` 容器停止時排程會失效**：廣播不會中斷（`dynamic_queue` 為空時自動
@@ -181,9 +186,9 @@ fallback 到 A 歌單隨機播放），但會安靜地退化成只播 A，沒有
 | `GET` | `/api/status` | 公開 | 整合性廣播狀態（當前曲目、進度、聽眾數、歌單統計） |
 | `GET` | `/api/history` | 公開 | 查詢最近播放曲目歷史紀錄 (SQLite) |
 | `GET` | `/api/current/cover`| 公開 | 取得當前播放曲目的專輯封面圖片 |
-| `POST`| `/api/auth/login` | 公開 | 管理員帳號密碼登入並取得 JWT Token |
+| `POST`| `/api/auth/login` | 公開 | 管理員帳號密碼登入並取得 JWT Token（同一 IP 15 分鐘內最多 10 次，超過回 `429`） |
 | `GET` | `/api/auth/me` | JWT 驗證 | 取得當前登入管理員身分資訊 |
-| `POST`| `/api/auth/change-password` | JWT 驗證 | 修改當前管理員密碼 |
+| `POST`| `/api/auth/change-password` | JWT 驗證 | 修改當前管理員密碼；回傳新 token，之前簽發的 token 全部失效 |
 | `POST`| `/api/control/skip` | JWT 驗證 | 遠端觸發跳至下一首 |
 | `POST`| `/api/control/reload` | JWT 驗證 | 強制熱重載所有歌單資料夾 |
 | `POST`| `/api/control/telnet` | JWT 驗證 | 發送原生 Liquidsoap Telnet 指令 |
@@ -195,9 +200,16 @@ fallback 到 A 歌單隨機播放），但會安靜地退化成只播 A，沒有
 | `POST`| `/api/schedules` | JWT 驗證 | 新增智慧排程規則（連續輪播/整點定分插播） |
 | `PUT` | `/api/schedules/:id` | JWT 驗證 | 更新指定排程規則 |
 | `DELETE`| `/api/schedules/:id` | JWT 驗證 | 刪除指定排程規則 |
-| `GET` | `/api/backup/export` | JWT 驗證 | 匯出歌單與排程設定備份檔 (JSON) |
-| `GET` | `/api/backup/export-full` | JWT 驗證 | 匯出全站備份檔 (ZIP，含所有 MP3 音訊檔) |
-| `POST`| `/api/backup/restore` | JWT 驗證 | 匯入還原備份資料 |
+| `POST`| `/api/schedules/:id/trigger` | JWT 驗證 | 立即播出該規則的歌單（走插播佇列） |
+| `GET` | `/api/backups` | JWT 驗證 | 列出備份檔 |
+| `POST`| `/api/backups` | JWT 驗證 | 建立歌單與排程設定備份檔 (JSON) |
+| `POST`| `/api/backups/full-zip` | JWT 驗證 | 建立全站備份檔 (ZIP，含所有 MP3 與設定檔) |
+| `POST`| `/api/backups/:filename/download-link` | JWT 驗證 | 取得短效下載網址（2 分鐘內有效、只限該檔案），讓瀏覽器直接下載 |
+| `GET` | `/api/backups/:filename/download` | JWT 驗證，或 download-link 給的 `?token=` | 下載備份檔 |
+| `POST`| `/api/backups/:filename/restore` | JWT 驗證 | 從已存的備份還原（JSON，或 ZIP 內附的設定檔） |
+| `POST`| `/api/backups/restore-data` | JWT 驗證 | 上傳 JSON 備份內容還原（上限 20 MB） |
+| `POST`| `/api/logs/playback` | 公開 | 聽眾端回報播放診斷（只送 WARN/ERROR，每 IP 每分鐘 30 筆；`playback.log` 超過 5 MB 輪替） |
+| `GET` / `DELETE` | `/api/logs/playback` | JWT 驗證 | 查詢／清空播放診斷日誌（含聽眾 IP） |
 
 ---
 

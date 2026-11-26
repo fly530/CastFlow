@@ -1,7 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
+// ★ execFile 而非 execSync：參數以陣列傳遞，不經過 shell。
+// 上傳檔名的清洗規則不會過濾 $ ` ( ) ; &，而 execSync 的字串在雙引號內
+// 仍會被 shell 展開 —— 一個叫 "$(...).zip" 的上傳檔就是容器內的任意指令執行。
+// 用非同步版：解開上百 MB 的 ZIP 時不卡住 WebSocket 推播與 AutoDJ。
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { getAudioMetadata } from './metadata.js';
+
+const execFileAsync = promisify(execFile);
 
 export const PLAYLIST_DEFS = {
   A: { name: 'Playlist A', role: '日常主力歌單 (75% 權重輪播)' },
@@ -52,31 +60,88 @@ function resolveFolderName(folder, playlistId) {
   return String(playlistId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_') || 'default';
 }
 
+/**
+ * 寫入端 (建立歌單、還原備份) 用的資料夾名正規化：不安全字元換成底線，
+ * 換完若只剩底線 (例如全中文) 就退回歌單 id，避免不同歌單共用 `__` 資料夾。
+ */
+export function normalizeFolderName(rawFolder, fallbackId) {
+  const cleaned = String(rawFolder ?? '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (/[a-zA-Z0-9]/.test(cleaned)) return cleaned;
+  return resolveFolderName(fallbackId, fallbackId);
+}
+
+/**
+ * 歌單資料夾的實際路徑 (不建立目錄)。可傳歌單 id 或資料庫列。
+ *
+ * ★ 排程器、狀態 API、備份、手動插播都必須經過這裡 —— 曾經各自用 `pl.folder`
+ *   直接組路徑，遇到不安全的 folder 時，上傳寫進 id 資料夾、播放卻讀另一個路徑。
+ */
+export function resolvePlaylistDir(playlistOrId) {
+  const isRow = playlistOrId !== null && typeof playlistOrId === 'object';
+  const pl = isRow ? playlistOrId : getPlaylistById(playlistOrId);
+  const id = isRow ? playlistOrId.id : playlistOrId;
+  return path.join(getMusicBaseDir(), resolveFolderName(pl ? pl.folder : id, id));
+}
+
+/** 同 resolvePlaylistDir，但目錄不存在時會建立 (上傳、移動等寫入操作用) */
 export function getPlaylistDir(playlistId) {
-  const pl = getPlaylistById(playlistId);
-  const folderName = resolveFolderName(pl ? pl.folder : playlistId, playlistId);
-  const dir = path.join(getMusicBaseDir(), folderName);
+  const dir = resolvePlaylistDir(playlistId);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
   return dir;
 }
 
+/** 歌單資料夾內的 mp3 檔名清單 (資料夾不存在時回傳空陣列，不會建立) */
+// 資料夾 mtime 沒變 (沒有新增、刪除、改名) 就沿用上次的清單。
+// 狀態推播每秒都要算各歌單曲目數，曲庫大時每秒 readdir 好幾個上千檔的資料夾很浪費。
+// 剛變動不到 2 秒的資料夾不快取：部分檔案系統 (網路磁碟、FAT) 的 mtime 只到秒，
+// 同一秒內的第二次變動看不出來。
+const dirListCache = new Map(); // dir -> { mtimeMs, files }
+const DIR_CACHE_SETTLE_MS = 2000;
+
+export function listMp3Files(playlistOrId) {
+  const dir = resolvePlaylistDir(playlistOrId);
+  try {
+    const { mtimeMs } = fs.statSync(dir);
+    const cached = dirListCache.get(dir);
+    if (cached && cached.mtimeMs === mtimeMs) return cached.files.slice();
+    const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.mp3') && !f.startsWith('.'));
+    if (Date.now() - mtimeMs > DIR_CACHE_SETTLE_MS) {
+      dirListCache.set(dir, { mtimeMs, files });
+    } else {
+      dirListCache.delete(dir);
+    }
+    return files.slice();
+  } catch {
+    dirListCache.delete(dir);
+    return [];
+  }
+}
+
+/** 以固定並行數處理陣列 (保留原順序) */
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 /**
  * 取得所有歌單摘要 (從 SQLite 讀取動態清單)
  */
 export async function listPlaylists() {
-  const baseDir = getMusicBaseDir();
   const dbPlaylists = getAllPlaylists();
   const result = [];
 
   for (const pl of dbPlaylists) {
-    const dir = path.join(baseDir, pl.folder);
-    let trackCount = 0;
-    if (fs.existsSync(dir)) {
-      const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.mp3'));
-      trackCount = files.length;
-    }
+    const trackCount = listMp3Files(pl).length;
     result.push({
       id: pl.id,
       name: pl.name,
@@ -101,14 +166,9 @@ export async function getPlaylistTracks(playlistId) {
   const dir = getPlaylistDir(playlistId);
   const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.mp3'));
 
-  const tracks = await Promise.all(
-    files.map(async (filename) => {
-      const filePath = path.join(dir, filename);
-      return await getAudioMetadata(filePath);
-    })
-  );
-
-  return tracks;
+  // 原本一次對所有檔案 Promise.all：上千首的歌單會同時開上千個檔案 (EMFILE)，
+  // 記憶體也一起暴衝。限制同時解析 8 個，已解析過的會走 metadata 快取。
+  return mapWithConcurrency(files, 8, (filename) => getAudioMetadata(path.join(dir, filename)));
 }
 
 /**
@@ -205,6 +265,67 @@ export async function moveTracks(sourcePlaylistId, targetPlaylistId, filenames) 
 }
 
 /**
+ * 曲目檔名清洗 (上傳、改名共用)：只過濾路徑跳脫與檔案系統不允許的字元，
+ * 保留中文等原始檔名。副檔名不在 allowedExts 內時補上 .mp3。
+ */
+export function sanitizeTrackFilename(rawName, { allowedExts = ['.mp3'] } = {}) {
+  let cleanName = path
+    .basename(String(rawName ?? ''))
+    .replace(/[\/\\?%*:|"<>\x00-\x1f]/g, '_')
+    .trim();
+  if (!cleanName || cleanName === '.' || cleanName === '..' || cleanName.startsWith('.')) {
+    cleanName = `track_${Date.now()}${cleanName.startsWith('.') ? cleanName : ''}`;
+  }
+  if (!allowedExts.includes(path.extname(cleanName).toLowerCase())) {
+    cleanName += '.mp3';
+  }
+  return cleanName;
+}
+
+/** 目標資料夾已有同名檔案時加上序號 _1, _2 …，避免互相覆蓋 */
+export function uniqueFilename(dir, name) {
+  const ext = path.extname(name);
+  const base = path.basename(name, ext);
+  let finalName = name;
+  let counter = 1;
+  while (fs.existsSync(path.join(dir, finalName))) {
+    finalName = `${base}_${counter}${ext}`;
+    counter++;
+  }
+  return finalName;
+}
+
+/**
+ * 解開上傳的 ZIP：只取 mp3 (不分大小寫)、攤平目錄，檔名衝突時加序號而不是覆蓋。
+ * 回傳實際加入歌單的檔名。
+ *
+ * 先解到暫存子目錄再逐一搬入 —— 直接 `unzip -o` 到歌單資料夾會無聲覆蓋同名曲目。
+ * `-C` 讓 *.mp3 不分大小寫；舊寫法 "*.mp3" "*.MP3" 只要其中一個樣式沒對到，
+ * unzip 就以 exit 11 結束，上傳流程把它當成失敗。
+ */
+export async function extractMp3sFromZip(zipFilePath, destDir) {
+  const tmpDir = fs.mkdtempSync(path.join(destDir, '.unzip-'));
+  try {
+    try {
+      await execFileAsync('/usr/bin/unzip', ['-j', '-o', '-q', '-C', zipFilePath, '*.mp3', '-d', tmpDir]);
+    } catch (err) {
+      // exit 11 = 壓縮包內沒有任何 mp3；其他代碼才是真的解壓失敗 (execFile 的 err.code 是結束代碼)
+      if (err.code !== 11) throw new Error(`解壓縮失敗 (unzip exit ${err.code ?? '?'})`);
+    }
+    const added = [];
+    for (const f of fs.readdirSync(tmpDir)) {
+      if (path.extname(f).toLowerCase() !== '.mp3') continue;
+      const finalName = uniqueFilename(destDir, sanitizeTrackFilename(f));
+      fs.renameSync(path.join(tmpDir, f), path.join(destDir, finalName));
+      added.push(finalName);
+    }
+    return added;
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
  * Multer 上傳中介軟體設定
  */
 const storage = multer.diskStorage({
@@ -218,40 +339,18 @@ const storage = multer.diskStorage({
     }
   },
   filename: (req, file, cb) => {
-    // 解決中文檔名被轉為底線並相互覆蓋的重大 Bug
+    // Multer 預設以 latin1 解析 multipart 標頭，UTF-8 中文檔名要轉回來
     let rawName = file.originalname;
     try {
-      // 處理 multipart 編碼可能造成的 latin1 亂碼 (Multer 預設以 latin1 解析 UTF-8 標頭)
       const recovered = Buffer.from(file.originalname, 'latin1').toString('utf8');
       if (recovered && !recovered.includes('\ufffd')) {
         rawName = recovered;
       }
     } catch {}
 
-    // 僅過濾路徑跳脫與危險字元，保留完整的繁體中文、英文等原始檔名
-    let cleanName = path.basename(rawName).replace(/[\/\\?%*:|"<>]/g, '_').trim();
-    if (!cleanName) {
-      cleanName = `track_${Date.now()}`;
-    }
-
-    const ext = path.extname(cleanName).toLowerCase();
-    if (ext !== '.mp3' && ext !== '.zip') {
-      cleanName += path.extname(file.originalname).toLowerCase() || '.mp3';
-    }
-
-    // 衝突防覆蓋：若目標資料夾已有同名檔案，自動加上序號 _1, _2
+    let cleanName = sanitizeTrackFilename(rawName, { allowedExts: ['.mp3', '.zip'] });
     try {
-      const destDir = getPlaylistDir(req.params.id);
-      let finalName = cleanName;
-      let counter = 1;
-      const baseWithoutExt = path.basename(cleanName, path.extname(cleanName));
-      const finalExt = path.extname(cleanName);
-
-      while (fs.existsSync(path.join(destDir, finalName))) {
-        finalName = `${baseWithoutExt}_${counter}${finalExt}`;
-        counter++;
-      }
-      cb(null, finalName);
+      cb(null, uniqueFilename(getPlaylistDir(req.params.id), cleanName));
     } catch {
       cb(null, cleanName);
     }
@@ -261,19 +360,16 @@ const storage = multer.diskStorage({
 export const uploadMiddleware = multer({
   storage,
   limits: { fileSize: 200 * 1024 * 1024 }, // 單檔最大 200MB (支援大型 ZIP 壓縮包)
+  // 只收 .mp3 與 .zip (以副檔名判斷；瀏覽器給的 MIME 不可靠)。
+  // 其他檔案略過而不是丟錯 —— 丟錯會讓同一批的其他曲目一起失敗
+  // (例如選資料夾上傳時夾帶的 cover.jpg)。略過的檔名放在 req.skippedFiles 回報給前端。
   fileFilter: (req, file, cb) => {
-    const orig = file.originalname.toLowerCase();
-    if (
-      file.mimetype.includes('audio') ||
-      file.mimetype.includes('zip') ||
-      file.mimetype.includes('compressed') ||
-      file.mimetype === 'application/octet-stream' ||
-      orig.endsWith('.mp3') ||
-      orig.endsWith('.zip')
-    ) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ext === '.mp3' || ext === '.zip') {
       cb(null, true);
     } else {
-      cb(new Error('僅支援 MP3 音訊檔案或 ZIP 壓縮包上傳'));
+      (req.skippedFiles ||= []).push(file.originalname);
+      cb(null, false);
     }
   }
 });

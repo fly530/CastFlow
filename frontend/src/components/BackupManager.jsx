@@ -18,7 +18,7 @@ import {
   Info,
   Music
 } from 'lucide-react';
-import { authFetch } from '../utils/api.js';
+import { authFetch, readJson } from '../utils/api.js';
 
 export default function BackupManager({ onRequestLogin, showToast, onRestoreSuccess }) {
   const [backups, setBackups] = useState([]);
@@ -28,6 +28,8 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
   const [restoreModalData, setRestoreModalData] = useState(null); // { type: 'file' | 'data', filename?, data? }
   const [isRestoring, setIsRestoring] = useState(false);
   const fileInputRef = useRef(null);
+  // 建立備份要跑好一陣子 (完整 ZIP 可能數分鐘)：用 ref 擋連點，state 更新前的第二下也不會再送一次
+  const busyRef = useRef(false);
 
   const fetchBackups = async () => {
     try {
@@ -37,13 +39,15 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
         onRequestLogin?.();
         return;
       }
-      const json = await res.json();
-      if (json.success) {
+      const json = await readJson(res);
+      if (res.ok && json.success) {
         setBackups(json.data || []);
         if (json.backupDir) setBackupDir(json.backupDir);
+      } else {
+        showToast?.(`讀取備份清單失敗: ${json.error || `HTTP ${res.status}`}`, 'error');
       }
     } catch (err) {
-      console.error('Failed to load backups:', err);
+      showToast?.(`讀取備份清單失敗: ${err.message}`, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -53,42 +57,27 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
     fetchBackups();
   }, []);
 
-  // 觸發瀏覽器下載 Blob
-  const triggerDownloadBlob = (blob, filename) => {
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
-  };
-
-  // 下載備份檔案 (UTF-8 BOM 修正，防止 Windows/Excel 亂碼)
+  // 下載備份：先向後端換一個 2 分鐘內有效的下載網址，再交給瀏覽器直接下載。
+  // 原本用 fetch + res.blob()，幾 GB 的完整備份會整包讀進分頁記憶體，下載完才跳出存檔。
   const handleDownload = async (filename) => {
     try {
-      const res = await authFetch(`/api/backups/${encodeURIComponent(filename)}/download`);
+      const res = await authFetch(`/api/backups/${encodeURIComponent(filename)}/download-link`, { method: 'POST' });
       if (res.status === 401) {
         showToast?.('管理員憑證已失效，請先登入', 'error');
         onRequestLogin?.();
         return;
       }
-      if (!res.ok) {
-        throw new Error(`下載失敗 (${res.status})`);
+      const json = await readJson(res);
+      if (!res.ok || !json.success || !json.url) {
+        throw new Error(json.error || `HTTP ${res.status}`);
       }
-
-      let blob;
-      if (filename.toLowerCase().endsWith('.json')) {
-        const text = await res.text();
-        // 加入 UTF-8 BOM (\uFEFF) 確保 Windows 記事本、Excel 等軟體開啟時 100% 正確識別 UTF-8 中文
-        blob = new Blob(['\uFEFF' + text], { type: 'application/json;charset=utf-8' });
-      } else {
-        blob = await res.blob();
-      }
-
-      triggerDownloadBlob(blob, filename);
-      showToast?.(`已開始下載備份檔「${filename}」`);
+      const a = document.createElement('a');
+      a.href = json.url;
+      a.download = json.filename || filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      showToast?.(`已開始下載備份檔「${filename}」，進度請看瀏覽器的下載列`);
     } catch (err) {
       showToast?.(`下載備份失敗: ${err.message}`, 'error');
     }
@@ -96,6 +85,8 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
 
   // 建立設定備份 (.json)
   const handleCreateBackup = async (autoDownload = false) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     try {
       setIsBackingUp(true);
       const res = await authFetch('/api/backups', { method: 'POST' });
@@ -104,7 +95,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
         onRequestLogin?.();
         return;
       }
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         showToast?.(
           autoDownload
@@ -122,12 +113,15 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
     } catch (err) {
       showToast?.(`建立備份連線異常: ${err.message}`, 'error');
     } finally {
+      busyRef.current = false;
       setIsBackingUp(false);
     }
   };
 
   // 建立全站完整備份 (.zip，含所有 MP3 歌曲與設定)
   const handleCreateFullZipBackup = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     try {
       setIsBackingUp(true);
       showToast?.('正在將所有歌單設定與實體 MP3 音訊檔案打包為 ZIP，請稍候...');
@@ -137,7 +131,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
         onRequestLogin?.();
         return;
       }
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         showToast?.(`全站音訊完整備份已成功打包（${formatBytes(json.data?.size)}），正在下載...`);
         fetchBackups();
@@ -150,6 +144,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
     } catch (err) {
       showToast?.(`連線異常: ${err.message}`, 'error');
     } finally {
+      busyRef.current = false;
       setIsBackingUp(false);
     }
   };
@@ -168,7 +163,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
         onRequestLogin?.();
         return;
       }
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         showToast?.(json.message || `已刪除備份「${filename}」`);
         fetchBackups();
@@ -214,7 +209,8 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
 
   // 確認執行還原
   const handleConfirmRestore = async () => {
-    if (!restoreModalData) return;
+    if (!restoreModalData || busyRef.current) return;
+    busyRef.current = true;
     try {
       setIsRestoring(true);
       let res;
@@ -237,7 +233,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
         return;
       }
 
-      const json = await res.json();
+      const json = await readJson(res);
       if (res.ok && json.success) {
         showToast?.(json.message || '歌單與排程配置已成功還原！');
         setRestoreModalData(null);
@@ -248,6 +244,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
     } catch (err) {
       showToast?.(`還原異常: ${err.message}`, 'error');
     } finally {
+      busyRef.current = false;
       setIsRestoring(false);
     }
   };
@@ -402,10 +399,11 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
             <p className="text-xs text-slate-400">目前「{backupDir}/」目錄中尚無備份檔案</p>
             <button
               onClick={() => handleCreateBackup(true)}
-              className="inline-flex items-center gap-1.5 text-xs text-purple-400 hover:text-purple-300 font-semibold transition-colors"
+              disabled={isBackingUp}
+              className="inline-flex items-center gap-1.5 text-xs text-purple-400 hover:text-purple-300 font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <FileDown className="w-3.5 h-3.5" />
-              <span>立即建立第一個備份檔</span>
+              <span>{isBackingUp ? '建立中...' : '立即建立第一個備份檔'}</span>
             </button>
           </div>
         ) : (

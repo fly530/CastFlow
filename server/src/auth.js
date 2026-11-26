@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { findUserByUsername, updateUserPassword } from './db.js';
+import { createRateLimiter } from './rateLimit.js';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -43,6 +44,45 @@ export function signJwtToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
 }
 
+/** 依使用者資料簽發登入 token (帶入目前的 token_version) */
+function signUserToken(user) {
+  return signJwtToken({ id: user.id, username: user.username, tv: user.token_version ?? 0 });
+}
+
+// 登入失敗限流：同一個 IP 15 分鐘內最多嘗試 10 次，登入成功就歸零。
+// 只依 IP、不依帳號：依帳號鎖會讓任何人都能把管理員鎖在門外。
+export const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+export const LOGIN_MAX_ATTEMPTS = 10;
+export const loginLimiter = createRateLimiter({ windowMs: LOGIN_WINDOW_MS, max: LOGIN_MAX_ATTEMPTS });
+
+// 帳號不存在時也跑一次 bcrypt，回應時間才不會洩漏「這個帳號存在與否」
+const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10);
+
+// 備份下載用的短效簽章網址。瀏覽器直接用 <a href> 下載，不必把整包 ZIP 讀進記憶體再轉 Blob；
+// 但 <a href> 帶不了 Authorization header，所以改由網址上的 token 驗證。
+// 用 JWT_SECRET 衍生的另一把金鑰簽：下載 token 外洩 (網址會出現在存取日誌) 也不能拿去當登入憑證，
+// 登入 token 也不能塞進網址當下載 token。token 綁定檔名，2 分鐘內有效。
+const DOWNLOAD_SECRET = crypto.createHmac('sha256', JWT_SECRET).update('castflow:backup-download').digest();
+const DOWNLOAD_AUDIENCE = 'backup-download';
+export const DOWNLOAD_TOKEN_TTL_SECONDS = 120;
+
+export function signDownloadToken(filename) {
+  return jwt.sign({ f: filename }, DOWNLOAD_SECRET, {
+    expiresIn: DOWNLOAD_TOKEN_TTL_SECONDS,
+    audience: DOWNLOAD_AUDIENCE
+  });
+}
+
+export function verifyDownloadToken(token, filename) {
+  if (typeof token !== 'string' || !token) return false;
+  try {
+    const decoded = jwt.verify(token, DOWNLOAD_SECRET, { audience: DOWNLOAD_AUDIENCE });
+    return decoded.f === filename;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 驗證身分中介軟體 (保護 Admin 控制與檔案異動端點，僅接受 Authorization Header)
  */
@@ -59,16 +99,23 @@ export function requireAuth(req, res, next) {
       error: '未提供授權憑證，請先登入管理員帳號'
     });
   }
+  let decoded;
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (err) {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    decoded = null;
+  }
+  // 帳號還在、且 token 版本與資料庫一致 (改密碼後舊 token 失效)。
+  // 改版前簽發的 token 沒有 tv，視為 0 —— 升級後不會把所有人登出，直到第一次改密碼。
+  const user = decoded ? findUserByUsername(decoded.username) : null;
+  if (!user || (decoded.tv ?? 0) !== (user.token_version ?? 0)) {
     return res.status(401).json({
       success: false,
       error: '登入憑證已失效或不合法，請重新登入'
     });
   }
+  req.user = decoded;
+  next();
 }
 
 /**
@@ -79,21 +126,20 @@ export async function loginUser(username, password) {
     return { success: false, error: '請提供帳號與密碼' };
   }
 
-  const user = findUserByUsername(username);
-  if (!user) {
+  const user = typeof username === 'string' ? findUserByUsername(username) : null;
+  // 非同步版 bcrypt：compareSync 每次會卡住 event loop 約 100ms，
+  // 有人狂打登入時，WebSocket 推播與 AutoDJ 巡檢都會跟著停頓
+  const isMatch = await bcrypt.compare(password, user ? user.password_hash : DUMMY_HASH);
+  if (!user || !isMatch) {
     return { success: false, error: '帳號或密碼錯誤' };
   }
 
-  const isMatch = bcrypt.compareSync(password, user.password_hash);
-  if (!isMatch) {
-    return { success: false, error: '帳號或密碼錯誤' };
-  }
-
-  const token = signJwtToken({ id: user.id, username: user.username });
+  const token = signUserToken(user);
   return {
     success: true,
     token,
-    user: { id: user.id, username: user.username }
+    user: { id: user.id, username: user.username },
+    passwordNeedsChange: Boolean(user.must_change_password)
   };
 }
 
@@ -114,14 +160,14 @@ export async function changePassword(username, currentPassword, newPassword) {
     return { success: false, error: '使用者不存在' };
   }
 
-  const isMatch = bcrypt.compareSync(currentPassword, user.password_hash);
+  const isMatch = await bcrypt.compare(currentPassword, user.password_hash);
   if (!isMatch) {
     return { success: false, error: '目前密碼不正確' };
   }
 
-  const salt = bcrypt.genSaltSync(10);
-  const hash = bcrypt.hashSync(newPassword, salt);
+  const hash = await bcrypt.hash(newPassword, 10);
   updateUserPassword(username, hash);
 
-  return { success: true, message: '密碼變更成功' };
+  // 其他裝置上的舊 token 已隨 token_version 失效；回傳新 token 讓目前這個分頁繼續登入
+  return { success: true, message: '密碼變更成功，其他裝置需要重新登入', token: signUserToken(findUserByUsername(username)) };
 }

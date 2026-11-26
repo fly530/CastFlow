@@ -20,7 +20,7 @@ export default function LoginModal({ isOpen, onClose, onSuccess }) {
     try {
       setIsLoading(true);
       setError(null);
-      const res = await login(username.trim(), password.trim());
+      const res = await login(username.trim(), password);
       if (res.success) {
         onSuccess?.(res.user, res.passwordNeedsChange);
         onClose?.();

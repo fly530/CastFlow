@@ -38,6 +38,20 @@ export async function authFetch(url, options = {}) {
   return response;
 }
 
+/**
+ * 解析 API 回應的 JSON。nginx 的 413、502 等錯誤頁是 HTML，直接 res.json()
+ * 只會得到「Unexpected token <」；這裡改成回傳一個看得懂的錯誤物件。
+ */
+export async function readJson(res) {
+  try {
+    return await res.json();
+  } catch {
+    const reason =
+      res.status === 413 ? '上傳內容超過伺服器大小上限' : res.status >= 500 ? '伺服器暫時無法回應' : '伺服器回應格式異常';
+    return { success: false, error: `${reason} (HTTP ${res.status})` };
+  }
+}
+
 export async function login(username, password) {
   try {
     const res = await fetch('/api/auth/login', {
@@ -45,10 +59,11 @@ export async function login(username, password) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    const data = await res.json();
+    const data = await readJson(res);
     if (res.ok && data.success && data.token) {
       setToken(data.token);
-      return { success: true, user: data.user, passwordNeedsChange: data.passwordNeedsChange };
+      const passwordNeedsChange = Boolean(data.passwordNeedsChange);
+      return { success: true, user: { ...data.user, passwordNeedsChange }, passwordNeedsChange };
     }
     return { success: false, error: data.error || '登入失敗' };
   } catch (err) {
@@ -56,16 +71,21 @@ export async function login(username, password) {
   }
 }
 
+/**
+ * 查詢目前登入身分。
+ * 回傳 { status: 'ok', user } / { status: 'unauthorized' } / { status: 'error' }；
+ * 呼叫端要區分「token 失效」與「網路暫時斷線」—— 後者不該把人登出。
+ */
 export async function getMe() {
   try {
     const res = await authFetch('/api/auth/me');
-    if (res.ok) {
-      const data = await res.json();
-      return data.user || null;
-    }
-    return null;
+    if (res.status === 401) return { status: 'unauthorized' };
+    if (!res.ok) return { status: 'error' };
+    const data = await readJson(res);
+    if (!data.user) return { status: 'error' };
+    return { status: 'ok', user: { ...data.user, passwordNeedsChange: Boolean(data.passwordNeedsChange) } };
   } catch {
-    return null;
+    return { status: 'error' };
   }
 }
 
@@ -76,8 +96,10 @@ export async function changePassword(oldPassword, newPassword) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ currentPassword: oldPassword, oldPassword, newPassword })
     });
-    const data = await res.json();
+    const data = await readJson(res);
     if (res.ok && data.success) {
+      // 改密碼會讓所有舊 token 失效 (含這個分頁的)，換成伺服器回傳的新 token 才能繼續操作
+      if (data.token) setToken(data.token);
       return { success: true, message: data.message };
     }
     return { success: false, error: data.error || '修改密碼失敗' };

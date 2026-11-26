@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { KeyRound, Check, AlertCircle, X } from 'lucide-react';
 import { changePassword } from '../utils/api.js';
 
-export default function ChangePasswordModal({ isOpen, onClose, onSuccess }) {
+export default function ChangePasswordModal({ isOpen, onClose, onSuccess, required = false }) {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -31,7 +31,10 @@ export default function ChangePasswordModal({ isOpen, onClose, onSuccess }) {
       setError(null);
       const res = await changePassword(oldPassword, newPassword);
       if (res.success) {
-        onSuccess?.('密碼修改成功，下次請使用新密碼登入');
+        setOldPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        onSuccess?.('密碼修改成功；其他裝置上的登入已失效，需要用新密碼重新登入');
         onClose?.();
       } else {
         setError(res.error || '密碼修改失敗');
@@ -64,6 +67,13 @@ export default function ChangePasswordModal({ isOpen, onClose, onSuccess }) {
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {required && (
+          <div className="mt-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span>目前使用的是系統產生的初始密碼 (印在伺服器日誌中)，請先設定新密碼。</span>
+          </div>
+        )}
 
         {error && (
           <div className="mt-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
