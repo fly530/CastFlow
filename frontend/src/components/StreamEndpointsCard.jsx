@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Radio, Music, Share2, Copy, Check, ExternalLink, Activity, Download } from 'lucide-react';
+import { copyText, streamEndpoints } from '../utils/stream.js';
 
 export default function StreamEndpointsCard({ showToast }) {
   const [copiedKey, setCopiedKey] = useState(null);
+  const copiedTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+  const urls = streamEndpoints();
 
   // Tailwind 只認得完整的 class 字串，所以各端點的配色直接寫死，不用樣板字串拼色名
   const endpoints = [
@@ -12,7 +15,7 @@ export default function StreamEndpointsCard({ showToast }) {
       key: 'mp3',
       name: 'MP3 串流網址',
       label: 'MP3_URL',
-      url: `${origin}/stream`,
+      url: urls.mp3,
       badge: 'Icecast MP3',
       hint: '給 AIMP、VLC、foobar2000、ESP32 等播放器使用，串流內含歌名',
       downloadable: true,
@@ -25,7 +28,7 @@ export default function StreamEndpointsCard({ showToast }) {
       key: 'hls',
       name: 'HLS 串流網址',
       label: 'HLS_URL',
-      url: `${origin}/hls/coolradio/live.m3u8`,
+      url: urls.hls,
       badge: 'm3u8 切片',
       hint: '給瀏覽器與 HLS.js 使用，串流本身不含歌名，需搭配 META_URL',
       Icon: Radio,
@@ -37,7 +40,7 @@ export default function StreamEndpointsCard({ showToast }) {
       key: 'meta',
       name: '即時中繼資料',
       label: 'META_URL',
-      url: `${origin}/api/nowplaying/coolradio`,
+      url: urls.meta,
       badge: 'JSON API',
       hint: '只有歌曲資訊，不是音訊，無法直接在播放器開啟',
       previewable: true,
@@ -48,15 +51,15 @@ export default function StreamEndpointsCard({ showToast }) {
     },
   ];
 
-  const copyToClipboard = (text, key, label) => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text);
-      setCopiedKey(key);
-      if (showToast) {
-        showToast(`已複製 ${label} 至剪貼簿`);
-      }
-      setTimeout(() => setCopiedKey(null), 2000);
+  const copyToClipboard = async (text, key, label) => {
+    if (!(await copyText(text))) {
+      showToast?.(`無法存取剪貼簿，請手動選取網址複製`, 'warning');
+      return;
     }
+    setCopiedKey(key);
+    showToast?.(`已複製 ${label} 至剪貼簿`);
+    clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopiedKey(null), 2000);
   };
 
   // 產生 .m3u 播放清單並下載，AIMP / VLC / foobar2000 可直接開啟播放
@@ -128,6 +131,7 @@ export default function StreamEndpointsCard({ showToast }) {
                   rel="noopener noreferrer"
                   className="p-1.5 rounded-lg text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white transition-all"
                   title="在新視窗開啟預覽 JSON"
+                  aria-label={`在新視窗開啟 ${label}`}
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>

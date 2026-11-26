@@ -14,6 +14,7 @@ import {
   Clock
 } from 'lucide-react';
 import { authFetch, readJson } from '../utils/api.js';
+import { DEFAULT_BITRATE_KBPS } from '../utils/stream.js';
 
 export default function NowPlayingControl({
   status,
@@ -21,16 +22,13 @@ export default function NowPlayingControl({
   upcomingTracks: propUpcomingTracks,
   bitrate: propBitrate,
   currentUser,
-  onSkip,
   onTrackSkipped,
-  onReload,
   onOpenConsole,
-  onRequestLogin,
   showToast
 }) {
   const currentTrack = propCurrentTrack || status?.currentTrack;
   const upcomingTracks = propUpcomingTracks || status?.upcomingTracks || [];
-  const bitrate = propBitrate || status?.icecast?.bitrate || 256;
+  const bitrate = propBitrate || status?.icecast?.bitrate || DEFAULT_BITRATE_KBPS;
 
   const [isSkipping, setIsSkipping] = useState(false);
   const [skipSuccess, setSkipSuccess] = useState(false);
@@ -139,25 +137,17 @@ export default function NowPlayingControl({
       setTimeout(() => setIsResettingProgress(false), 50);
       const startTime = Date.now();
 
-      if (onSkip) {
-        await onSkip();
+      const res = await authFetch('/api/control/skip', { method: 'POST' });
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
+      const json = await readJson(res);
+      if (!res.ok || !json.success) {
+        // 例如 Liquidsoap Telnet 斷線時回 500：不能照樣顯示「已跳播」
+        throw new Error(json.error || `HTTP ${res.status}`);
+      }
+      if (onTrackSkipped) {
+        onTrackSkipped();
       } else {
-        const res = await authFetch('/api/control/skip', { method: 'POST' });
-        if (res.status === 401) {
-          showToast?.('請先以管理員身分登入後再執行跳歌', 'error');
-          onRequestLogin?.();
-          return;
-        }
-        const json = await readJson(res);
-        if (!res.ok || !json.success) {
-          // 例如 Liquidsoap Telnet 斷線時回 500：不能照樣顯示「已跳播」
-          throw new Error(json.error || `HTTP ${res.status}`);
-        }
-        if (onTrackSkipped) {
-          onTrackSkipped();
-        } else {
-          showToast?.('已跳播至下一首');
-        }
+        showToast?.('已跳播至下一首');
       }
 
       // 保證至少 800ms 的轉場視覺反饋，避免閃爍過快讓人感覺無反應
@@ -177,21 +167,13 @@ export default function NowPlayingControl({
   const handleReload = async () => {
     try {
       setIsReloading(true);
-      if (onReload) {
-        await onReload();
-      } else {
-        const res = await authFetch('/api/control/reload', { method: 'POST' });
-        if (res.status === 401) {
-          showToast?.('請先以管理員身分登入', 'error');
-          onRequestLogin?.();
-          return;
-        }
-        const json = await readJson(res);
-        if (!res.ok || !json.success) {
-          throw new Error(json.error || `HTTP ${res.status}`);
-        }
-        showToast?.('保底歌單已重新載入');
+      const res = await authFetch('/api/control/reload', { method: 'POST' });
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
+      const json = await readJson(res);
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || `HTTP ${res.status}`);
       }
+      showToast?.('保底歌單已重新載入');
     } catch (err) {
       showToast?.(`重新載入失敗: ${err.message}`, 'error');
     } finally {
@@ -301,6 +283,8 @@ export default function NowPlayingControl({
                       onClick={() => setIsMuted(!isMuted)}
                       className="text-slate-400 hover:text-white transition-colors"
                       title={isMuted ? '取消靜音' : '靜音'}
+                      aria-label={isMuted ? '取消靜音' : '靜音'}
+                      aria-pressed={isMuted}
                     >
                       {isMuted || volume === 0 ? (
                         <VolumeX className="w-3.5 h-3.5 text-rose-400" />
@@ -318,6 +302,7 @@ export default function NowPlayingControl({
                         setVolume(parseFloat(e.target.value));
                         setIsMuted(false);
                       }}
+                      aria-label="監聽音量"
                       className="w-16 h-1 accent-purple-500 bg-slate-800 rounded-lg cursor-pointer"
                     />
                   </div>
@@ -330,7 +315,7 @@ export default function NowPlayingControl({
               <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-2xl overflow-hidden bg-slate-800 border-2 border-purple-500/30 shadow-xl flex-shrink-0 group">
                 <img
                   src={coverUrl}
-                  alt="Cover"
+                  alt=""
                   className={`w-full h-full object-cover transition-transform duration-700 ${
                     isMonitoring ? 'scale-105' : ''
                   }`}

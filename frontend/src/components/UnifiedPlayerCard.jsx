@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { loadHls } from '../utils/hls.js';
+import { DEFAULT_BITRATE_KBPS } from '../utils/stream.js';
 import {
   Play,
   Pause,
@@ -16,7 +17,8 @@ import {
   History,
   Music,
   Clock,
-  Sparkles
+  Sparkles,
+  Cpu
 } from 'lucide-react';
 import CastFlowLogo from './CastFlowLogo';
 
@@ -350,7 +352,7 @@ export default function UnifiedPlayerCard({
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
-      logEvent('INFO', 'STREAM_SWITCH', `切換為 Icecast 原生 MP3 持續串流 (CBR ${bitrate || 256} kbps)`);
+      logEvent('INFO', 'STREAM_SWITCH', `切換為 Icecast 原生 MP3 持續串流 (CBR ${bitrate || DEFAULT_BITRATE_KBPS} kbps)`);
       if (wantPlayRef.current) {
         audio.src = `${mp3StreamUrl}?nocache=${Date.now()}`;
         setIsLoading(true);
@@ -668,14 +670,27 @@ export default function UnifiedPlayerCard({
             {/* 位元率標籤 */}
             <div className="hidden sm:flex items-center gap-1.5 bg-slate-950/80 border border-slate-800 rounded-full px-3 py-1.5 text-xs text-slate-400 font-mono">
               <Signal className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{bitrate || 256} kbps</span>
+              <span>{bitrate || DEFAULT_BITRATE_KBPS} kbps</span>
             </div>
+
+            {/* 外部播放器 (VLC、ESP32…) 用的串流網址。原本 PlayerView 有傳 onOpenInfoModal 但畫面上沒有入口 */}
+            {onOpenInfoModal && (
+              <button
+                onClick={onOpenInfoModal}
+                className="p-2 flex items-center justify-center bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white border border-slate-700/80 rounded-full transition-all active:scale-95 shadow-sm"
+                title="外部播放器與串流網址"
+                aria-label="外部播放器與串流網址"
+              >
+                <Cpu className="w-4 h-4" />
+              </button>
+            )}
 
             {/* 客廳電視全螢幕模式切換按鈕 (只留圖示) */}
             <button
               onClick={toggleFullscreen}
               className="p-2 flex items-center justify-center bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white border border-slate-700/80 rounded-full transition-all active:scale-95 shadow-sm"
               title={isFullscreen ? '離開全螢幕 (Esc)' : '電視全螢幕劇院模式 (F)'}
+              aria-label={isFullscreen ? '離開全螢幕' : '全螢幕'}
             >
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             </button>
@@ -685,6 +700,7 @@ export default function UnifiedPlayerCard({
               onClick={onSwitchToAdmin}
               className="p-2 text-slate-400 hover:text-purple-400 hover:bg-slate-800/80 rounded-full transition-colors flex items-center gap-1 text-xs"
               title={currentUser ? `已登入 (${currentUser.username}) - 進入管理控制台` : "管理中心登入"}
+              aria-label={currentUser ? undefined : '管理中心登入'}
             >
               {currentUser ? (
                 <span className="flex items-center gap-1.5 text-purple-400 font-semibold px-1">
@@ -856,6 +872,7 @@ export default function UnifiedPlayerCard({
                   onClick={reloadStream}
                   className="p-3 text-slate-400 hover:text-white hover:bg-slate-800/80 border border-slate-800 rounded-xl transition-all"
                   title="重新連線串流"
+                  aria-label="重新連線串流"
                 >
                   <RotateCw className="w-5 h-5" />
                 </button>
@@ -867,6 +884,8 @@ export default function UnifiedPlayerCard({
                   onClick={toggleMute}
                   className="text-slate-400 hover:text-white transition-colors"
                   title="切換靜音 (M)"
+                  aria-label={isMuted ? '取消靜音' : '靜音'}
+                  aria-pressed={isMuted}
                 >
                   {isMuted || volume === 0 ? (
                     <VolumeX className="w-4 h-4 text-rose-400" />
@@ -883,13 +902,14 @@ export default function UnifiedPlayerCard({
                   step="0.01"
                   value={isMuted ? 0 : volume}
                   onChange={handleVolumeChange}
+                  aria-label="音量"
                   className="w-full accent-indigo-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
                 />
               </div>
             </div>
 
             {errorMsg && (
-              <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl px-3.5 py-2">
+              <p role="alert" className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl px-3.5 py-2">
                 {errorMsg}
               </p>
             )}

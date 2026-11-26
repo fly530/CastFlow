@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { Lock, KeyRound, User, AlertCircle, ShieldAlert, Radio, ArrowRight, Github } from 'lucide-react';
 import { login } from '../utils/api.js';
 
@@ -7,6 +7,7 @@ export default function LoginPage({ onLoginSuccess, onSwitchToPlayer }) {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const uid = useId();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -71,7 +72,7 @@ export default function LoginPage({ onLoginSuccess, onSwitchToPlayer }) {
           </div>
 
           {error && (
-            <div className="mt-5 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2 animate-in fade-in">
+            <div role="alert" className="mt-5 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2 animate-fade-in">
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
               <span>{error}</span>
             </div>
@@ -79,13 +80,16 @@ export default function LoginPage({ onLoginSuccess, onSwitchToPlayer }) {
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label htmlFor={`${uid}-user`} className="block text-xs font-semibold text-slate-300 mb-1.5">
                 管理員帳號
               </label>
               <div className="relative">
-                <User className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <User aria-hidden="true" className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
+                  id={`${uid}-user`}
                   type="text"
+                  autoComplete="username"
+                  autoCapitalize="off"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
@@ -96,13 +100,15 @@ export default function LoginPage({ onLoginSuccess, onSwitchToPlayer }) {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label htmlFor={`${uid}-pass`} className="block text-xs font-semibold text-slate-300 mb-1.5">
                 管理密碼
               </label>
               <div className="relative">
-                <KeyRound className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <KeyRound aria-hidden="true" className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
+                  id={`${uid}-pass`}
                   type="password"
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
@@ -140,7 +146,7 @@ export default function LoginPage({ onLoginSuccess, onSwitchToPlayer }) {
 
       {/* 頁尾 */}
       <div className="w-full max-w-5xl py-4 text-center text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-2 z-10">
-        <span>CastFlow Cloud-Native Automation Console © 2026.</span>
+        <span>CastFlow 管理後台 © 2026</span>
         <a
           href="https://github.com/fly530/CastFlow"
           target="_blank"
@@ -148,7 +154,7 @@ export default function LoginPage({ onLoginSuccess, onSwitchToPlayer }) {
           className="hover:text-slate-300 transition-colors flex items-center gap-1"
         >
           <Github className="w-3.5 h-3.5" />
-          <span>GitHub Repository</span>
+          <span>GitHub</span>
         </a>
       </div>
     </div>

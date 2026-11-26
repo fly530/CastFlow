@@ -1,6 +1,27 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
 
+/*
+ * 進場動畫。原本元件用的是 animate-in / fade-in / zoom-in-95 (tailwindcss-animate 外掛的 class)，
+ * 專案沒裝那個外掛，所以從來沒有生效。這裡只定義實際用到的兩種。
+ */
+@theme {
+  --animate-fade-in: fade-in 150ms ease-out;
+  --animate-pop-in: pop-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px) scale(0.97);
+    }
+  }
+}
+
 @layer utilities {
   .backdrop-blur-glass {
     backdrop-filter: blur(16px);
@@ -11,4 +32,13 @@
 /* 唱片旋轉暫停控制 */
 .paused {
   animation-play-state: paused !important;
+}
+
+/* 系統設定「減少動態效果」時關掉進場動畫與唱片旋轉 */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .animate-pop-in,
+  .animate-spin-slow {
+    animation: none !important;
+  }
 }

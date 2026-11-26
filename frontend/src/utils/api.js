@@ -30,9 +30,11 @@ export async function authFetch(url, options = {}) {
     headers
   });
 
-  if (response.status === 401) {
-    // 權限過期或無效
+  if (response.status === 401 && token) {
+    // 權限過期或無效。只有「帶著 token 卻被拒」才算登入失效；
+    // 本來就沒登入時不必再通知一次
     setToken(null);
+    window.dispatchEvent(new Event('castflow_session_expired'));
   }
 
   return response;

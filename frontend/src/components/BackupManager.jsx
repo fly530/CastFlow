@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useId } from 'react';
 import {
   Archive,
   Download,
@@ -19,12 +19,16 @@ import {
   Music
 } from 'lucide-react';
 import { authFetch, readJson } from '../utils/api.js';
+import Modal from './Modal.jsx';
+import { useConfirm } from './ConfirmDialog.jsx';
 
-export default function BackupManager({ onRequestLogin, showToast, onRestoreSuccess }) {
+export default function BackupManager({ showToast, onRestoreSuccess }) {
   const [backups, setBackups] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
-  const [backupDir, setBackupDir] = useState('music/backups');
+  const [backupDir, setBackupDir] = useState('');
+  const confirm = useConfirm();
+  const restoreTitleId = useId();
   const [restoreModalData, setRestoreModalData] = useState(null); // { type: 'file' | 'data', filename?, data? }
   const [isRestoring, setIsRestoring] = useState(false);
   const fileInputRef = useRef(null);
@@ -35,10 +39,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
     try {
       setIsLoading(true);
       const res = await authFetch('/api/backups');
-      if (res.status === 401) {
-        onRequestLogin?.();
-        return;
-      }
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
       const json = await readJson(res);
       if (res.ok && json.success) {
         setBackups(json.data || []);
@@ -62,11 +63,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
   const handleDownload = async (filename) => {
     try {
       const res = await authFetch(`/api/backups/${encodeURIComponent(filename)}/download-link`, { method: 'POST' });
-      if (res.status === 401) {
-        showToast?.('管理員憑證已失效，請先登入', 'error');
-        onRequestLogin?.();
-        return;
-      }
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
       const json = await readJson(res);
       if (!res.ok || !json.success || !json.url) {
         throw new Error(json.error || `HTTP ${res.status}`);
@@ -90,11 +87,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
     try {
       setIsBackingUp(true);
       const res = await authFetch('/api/backups', { method: 'POST' });
-      if (res.status === 401) {
-        showToast?.('管理員憑證已失效，請先登入', 'error');
-        onRequestLogin?.();
-        return;
-      }
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
       const json = await readJson(res);
       if (res.ok && json.success) {
         showToast?.(
@@ -126,11 +119,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
       setIsBackingUp(true);
       showToast?.('正在將所有歌單設定與實體 MP3 音訊檔案打包為 ZIP，請稍候...');
       const res = await authFetch('/api/backups/full-zip', { method: 'POST' });
-      if (res.status === 401) {
-        showToast?.('管理員憑證已失效，請先登入', 'error');
-        onRequestLogin?.();
-        return;
-      }
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
       const json = await readJson(res);
       if (res.ok && json.success) {
         showToast?.(`全站音訊完整備份已成功打包（${formatBytes(json.data?.size)}），正在下載...`);
@@ -151,18 +140,18 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
 
   // 刪除備份檔
   const handleDeleteBackup = async (filename) => {
-    if (!window.confirm(`確定要刪除備份檔「${filename}」嗎？此操作將永久從伺服器磁碟移除。`)) {
-      return;
-    }
+    const ok = await confirm({
+      title: '刪除備份檔',
+      message: `確定要刪除「${filename}」嗎？檔案會從伺服器磁碟永久移除，無法復原。`,
+      confirmLabel: '刪除',
+      danger: true
+    });
+    if (!ok) return;
     try {
       const res = await authFetch(`/api/backups/${encodeURIComponent(filename)}`, {
         method: 'DELETE'
       });
-      if (res.status === 401) {
-        showToast?.('請先登入管理員帳號', 'error');
-        onRequestLogin?.();
-        return;
-      }
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
       const json = await readJson(res);
       if (res.ok && json.success) {
         showToast?.(json.message || `已刪除備份「${filename}」`);
@@ -227,11 +216,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
         });
       }
 
-      if (res.status === 401) {
-        showToast?.('請先登入管理員帳號', 'error');
-        onRequestLogin?.();
-        return;
-      }
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
 
       const json = await readJson(res);
       if (res.ok && json.success) {
@@ -292,13 +277,13 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
           {/* 左側說明 */}
           <div className="space-y-2">
             <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-purple-500/20 ring-1 ring-white/10">
+              <div className="w-10 h-10 shrink-0 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-purple-500/20 ring-1 ring-white/10" aria-hidden="true">
                 <FolderArchive className="w-5 h-5 text-white" />
               </div>
               <div>
                 <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
                   <span>歌單與排程備份中心</span>
-                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  <span className="hidden sm:inline text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 whitespace-nowrap">
                     Backup & Restore
                   </span>
                 </h2>
@@ -312,9 +297,10 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
               <HardDrive className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
               <span>伺服器實體儲存目錄：</span>
               <code className="font-mono text-purple-300 bg-purple-950/50 px-1.5 py-0.5 rounded border border-purple-800/40">
-                {backupDir}/
+                {backupDir || '…'}
               </code>
-              <span className="text-slate-500">（本機路徑：./music/backups/）</span>
+              {/* 原本寫死「本機路徑：./music/backups/」，跟兩種 compose 的實際掛載都對不上 */}
+              <span className="text-slate-500">（容器內路徑；主機上的位置依 compose 掛載而定，預設為 ./backups）</span>
             </div>
           </div>
 
@@ -523,6 +509,7 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
                       onClick={() => handleDeleteBackup(b.filename)}
                       className="p-1.5 rounded-xl text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
                       title="從伺服器刪除此備份"
+                      aria-label={`刪除備份「${b.filename}」`}
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -536,68 +523,74 @@ export default function BackupManager({ onRequestLogin, showToast, onRestoreSucc
 
       {/* 還原確認彈跳視窗 */}
       {restoreModalData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
-                <AlertCircle className="w-5 h-5" />
-              </div>
-              <div>
-                <h4 className="text-base font-bold text-white">確認執行備份還原？</h4>
-                <p className="text-xs text-slate-400">請仔細確認以下還原影響</p>
-              </div>
+        <Modal
+          onClose={() => setRestoreModalData(null)}
+          titleId={restoreTitleId}
+          dismissible={!isRestoring}
+          role="alertdialog"
+          panelClassName="max-w-md p-6 space-y-4"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+              <AlertCircle className="w-5 h-5" />
             </div>
-
-            <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4 space-y-2 text-xs">
-              <div className="flex items-center justify-between text-slate-300">
-                <span>還原來源：</span>
-                <span className="font-mono font-bold text-purple-300 truncate max-w-[200px]">
-                  {restoreModalData.filename}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-slate-300">
-                <span>類型：</span>
-                <span className="font-bold text-slate-200">
-                  {restoreModalData.isZip ? '全站歌曲音訊壓縮包 (.ZIP)' : '歌單與排程設定檔 (.JSON)'}
-                </span>
-              </div>
-            </div>
-
-            <div className="bg-amber-950/30 border border-amber-800/40 rounded-2xl p-3 flex items-start gap-2.5 text-xs text-amber-300/90">
-              <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
-              <div>
-                <p className="font-semibold text-amber-300">重要注意事項：</p>
-                <p className="text-[11px] text-amber-300/80 mt-0.5 leading-relaxed">
-                  {restoreModalData.isZip
-                    ? '還原 ZIP 壓縮包將會自動解開音訊檔案至各歌單資料夾，並同時還原歌單與智慧排程配置。'
-                    : '還原將會以備份內容替換目前系統內的歌單資訊與智慧排程規則。磁碟上的實體音訊 MP3 檔案將完整保留不受影響。'}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                onClick={() => setRestoreModalData(null)}
-                disabled={isRestoring}
-                className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={handleConfirmRestore}
-                disabled={isRestoring}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow-lg shadow-amber-600/20 transition-all active:scale-95 disabled:opacity-50"
-              >
-                {isRestoring ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <RotateCcw className="w-3.5 h-3.5" />
-                )}
-                <span>{isRestoring ? '還原中...' : '確認還原'}</span>
-              </button>
+            <div>
+              <h4 id={restoreTitleId} className="text-base font-bold text-white">
+                確認執行備份還原？
+              </h4>
+              <p className="text-xs text-slate-400">請仔細確認以下還原影響</p>
             </div>
           </div>
-        </div>
+
+          <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4 space-y-2 text-xs">
+            <div className="flex items-center justify-between text-slate-300">
+              <span>還原來源：</span>
+              <span className="font-mono font-bold text-purple-300 truncate max-w-[200px]" title={restoreModalData.filename}>
+                {restoreModalData.filename}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-slate-300">
+              <span>類型：</span>
+              <span className="font-bold text-slate-200">
+                {restoreModalData.isZip ? '全站歌曲音訊壓縮包 (.ZIP)' : '歌單與排程設定檔 (.JSON)'}
+              </span>
+            </div>
+          </div>
+
+          <div className="bg-amber-950/30 border border-amber-800/40 rounded-2xl p-3 flex items-start gap-2.5 text-xs text-amber-300/90">
+            <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+            <div>
+              <p className="font-semibold text-amber-300">重要注意事項：</p>
+              <p className="text-[11px] text-amber-300/80 mt-0.5 leading-relaxed">
+                {restoreModalData.isZip
+                  ? '還原 ZIP 壓縮包將會自動解開音訊檔案至各歌單資料夾，並同時還原歌單與智慧排程配置。'
+                  : '還原將會以備份內容替換目前系統內的歌單資訊與智慧排程規則。磁碟上的實體音訊 MP3 檔案將完整保留不受影響。'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button
+              onClick={() => setRestoreModalData(null)}
+              disabled={isRestoring}
+              className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+            >
+              取消
+            </button>
+            <button
+              onClick={handleConfirmRestore}
+              disabled={isRestoring}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow-lg shadow-amber-600/20 transition-all active:scale-95 disabled:opacity-50"
+            >
+              {isRestoring ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <RotateCcw className="w-3.5 h-3.5" />
+              )}
+              <span>{isRestoring ? '還原中...' : '確認還原'}</span>
+            </button>
+          </div>
+        </Modal>
       )}
     </div>
   );

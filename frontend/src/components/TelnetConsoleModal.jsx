@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
-import { X, Terminal, Send, Play } from 'lucide-react';
+import React, { useId, useState } from 'react';
+import { Terminal, Send } from 'lucide-react';
 import { authFetch, readJson } from '../utils/api.js';
+import Modal, { ModalCloseButton } from './Modal.jsx';
 
-export default function TelnetConsoleModal({ isOpen, onClose, onRequestLogin }) {
+export default function TelnetConsoleModal({ isOpen, onClose }) {
+  const titleId = useId();
   const [command, setCommand] = useState('radio.status');
   const [output, setOutput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -32,11 +34,8 @@ export default function TelnetConsoleModal({ isOpen, onClose, onRequestLogin }) 
         body: JSON.stringify({ command: cmd.trim() })
       });
 
-      if (res.status === 401) {
-        setOutput((prev) => `> ${cmd}\n[認證錯誤] 請先登入管理員帳號再執行控制指令\n\n${prev}`);
-        onRequestLogin?.();
-        return;
-      }
+      // 401 時 authFetch 已經清掉登入狀態，整個後台會切回登入頁
+      if (res.status === 401) return;
 
       const json = await readJson(res);
       if (res.ok && json.success) {
@@ -52,76 +51,81 @@ export default function TelnetConsoleModal({ isOpen, onClose, onRequestLogin }) 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="relative w-full max-w-2xl rounded-3xl bg-slate-900 border border-slate-800 shadow-2xl p-6 sm:p-8 overflow-hidden">
-        <div className="flex items-center justify-between pb-4 border-b border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400">
-              <Terminal className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-white">Liquidsoap Telnet 控制台</h3>
-              <p className="text-xs text-slate-400">直接與廣播底層引擎溝通並測試腳本狀態</p>
-            </div>
+    <Modal onClose={onClose} titleId={titleId} panelClassName="max-w-2xl p-6 sm:p-8">
+      <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400" aria-hidden="true">
+            <Terminal className="w-5 h-5" />
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* 常用快捷按鈕 */}
-        <div className="mt-4 flex items-center gap-1.5 flex-wrap">
-          <span className="text-[11px] font-semibold text-slate-500 mr-1">常用指令:</span>
-          {quickCommands.map((q) => (
-            <button
-              key={q}
-              onClick={() => {
-                setCommand(q);
-                handleSend(q);
-              }}
-              disabled={isLoading}
-              className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-purple-300 hover:bg-slate-800 transition-colors"
-            >
-              {q}
-            </button>
-          ))}
-        </div>
-
-        {/* 輸入指令列 */}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSend();
-          }}
-          className="mt-4 flex gap-2"
-        >
-          <div className="relative flex-1">
-            <input
-              type="text"
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder="例如: radio.status, help, uptime..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 font-mono text-xs text-white placeholder-slate-600 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-            />
+          <div>
+            <h3 id={titleId} className="text-lg font-bold text-white">
+              Liquidsoap Telnet 控制台
+            </h3>
+            <p className="text-xs text-slate-400">直接與廣播底層引擎溝通並測試腳本狀態</p>
           </div>
-          <button
-            type="submit"
-            disabled={isLoading || !command.trim()}
-            className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50"
-          >
-            <Send className="w-3.5 h-3.5" />
-            <span>發送</span>
-          </button>
-        </form>
-
-        {/* 輸出終端畫面 */}
-        <div className="mt-4 p-4 rounded-2xl bg-black border border-slate-800 font-mono text-xs text-emerald-400 h-64 overflow-y-auto whitespace-pre-wrap shadow-inner">
-          {output || '/* 等待指令輸入中... 請輸入指令或點擊上方快捷鍵 */'}
         </div>
+        <ModalCloseButton onClick={onClose} />
       </div>
-    </div>
+
+      {/* 常用快捷按鈕 */}
+      <div className="mt-4 flex items-center gap-1.5 flex-wrap">
+        <span className="text-[11px] font-semibold text-slate-500 mr-1">常用指令:</span>
+        {quickCommands.map((q) => (
+          <button
+            key={q}
+            onClick={() => {
+              setCommand(q);
+              handleSend(q);
+            }}
+            disabled={isLoading}
+            className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-purple-300 hover:bg-slate-800 transition-colors"
+          >
+            {q}
+          </button>
+        ))}
+      </div>
+
+      {/* 輸入指令列 */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleSend();
+        }}
+        className="mt-4 flex gap-2"
+      >
+        <div className="relative flex-1">
+          <input
+            type="text"
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            placeholder="例如: radio.status, help, uptime..."
+            aria-label="Telnet 指令"
+            autoFocus
+            spellCheck={false}
+            autoCapitalize="off"
+            autoComplete="off"
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 font-mono text-xs text-white placeholder-slate-600 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={isLoading || !command.trim()}
+          className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50"
+        >
+          <Send className="w-3.5 h-3.5" />
+          <span>發送</span>
+        </button>
+      </form>
+
+      {/* 輸出終端畫面 */}
+      <div
+        role="log"
+        aria-live="polite"
+        aria-label="指令輸出"
+        className="mt-4 p-4 rounded-2xl bg-black border border-slate-800 font-mono text-xs text-emerald-400 h-64 overflow-y-auto whitespace-pre-wrap break-all shadow-inner"
+      >
+        {output || '/* 等待指令輸入中... 請輸入指令或點擊上方快捷鍵 */'}
+      </div>
+    </Modal>
   );
 }

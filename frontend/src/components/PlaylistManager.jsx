@@ -22,6 +22,7 @@ import {
   Sliders
 } from 'lucide-react';
 import { authFetch, readJson } from '../utils/api.js';
+import { useConfirm } from './ConfirmDialog.jsx';
 
 const isUploadable = (file) => /\.(mp3|zip)$/i.test(file?.name || '');
 
@@ -53,13 +54,12 @@ export default function PlaylistManager({
   onOpenNewPlaylist,
   onEditPlaylist,
   onTracksChanged,
-  onRequestLogin,
   refreshTrigger,
-  refreshKey,
   onRefresh,
   showToast
 }) {
   // 原本這裡用 alert()，與其他頁面的 toast 不一致，且 alert 會卡住整個分頁 (含 WebSocket 更新)
+  const confirm = useConfirm();
   const notify = (message, type = 'success') => (showToast ? showToast(message, type) : window.alert(message));
 
   const [selectedId, setSelectedId] = useState('A');
@@ -67,9 +67,6 @@ export default function PlaylistManager({
   const [isLoading, setIsLoading] = useState(false);
 
   // 歌單名稱編輯狀態
-  const [editingPlaylistId, setEditingPlaylistId] = useState(null);
-  const [editingPlaylistName, setEditingPlaylistName] = useState('');
-  const [isSavingPlaylistName, setIsSavingPlaylistName] = useState(false);
 
   // 批次勾選與操作狀態
   const [selectedTrackFilenames, setSelectedTrackFilenames] = useState([]);
@@ -150,7 +147,7 @@ export default function PlaylistManager({
 
   useEffect(() => {
     fetchTracks(selectedId);
-  }, [selectedId, refreshKey, refreshTrigger]);
+  }, [selectedId, refreshTrigger]);
 
   // 上傳提示訊息於 6 秒後自動隱藏
   useEffect(() => {
@@ -161,43 +158,6 @@ export default function PlaylistManager({
       return () => clearTimeout(timer);
     }
   }, [uploadMsg]);
-
-  // 歌單名稱修改
-  const handleStartEditPlaylist = (e, pl) => {
-    e.stopPropagation();
-    setEditingPlaylistId(pl.id);
-    setEditingPlaylistName(pl.name || pl.id);
-  };
-
-  const handleSavePlaylistName = async (e, plId) => {
-    e.stopPropagation();
-    if (!editingPlaylistName.trim()) return;
-    try {
-      setIsSavingPlaylistName(true);
-      const res = await authFetch(`/api/playlists/${plId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: editingPlaylistName.trim() })
-      });
-      if (res.status === 401) {
-        notify('請先以管理員身分登入後再修改歌單名稱', 'error');
-        onRequestLogin?.();
-        return;
-      }
-      const json = await readJson(res);
-      if (res.ok && json.success !== false) {
-        setEditingPlaylistId(null);
-        notify(`已將歌單名稱改為「${editingPlaylistName.trim()}」`);
-        onRefresh?.();
-      } else {
-        notify(`修改歌單名稱失敗: ${json.error || `HTTP ${res.status}`}`, 'error');
-      }
-    } catch (err) {
-      notify(`修改歌單名稱失敗: ${err.message}`, 'error');
-    } finally {
-      setIsSavingPlaylistName(false);
-    }
-  };
 
   // 刪除歌單處理 (有歌曲的歌單禁止刪除)
   const handleDeletePlaylist = async (e, pl) => {
@@ -213,20 +173,20 @@ export default function PlaylistManager({
       return;
     }
 
-    if (!window.confirm(`確定要刪除空白歌單「${pl.name || pl.id}」嗎？\n此歌單的排程關聯將會一併移除。`)) {
-      return;
-    }
+    const ok = await confirm({
+      title: '刪除歌單',
+      message: `確定要刪除空白歌單「${pl.name || pl.id}」嗎？\n使用這個歌單的排程規則會一併移除。`,
+      confirmLabel: '刪除',
+      danger: true
+    });
+    if (!ok) return;
 
     try {
       const res = await authFetch(`/api/playlists/${pl.id}`, {
         method: 'DELETE'
       });
 
-      if (res.status === 401) {
-        notify('請先以管理員身分登入', 'error');
-        onRequestLogin?.();
-        return;
-      }
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
 
       const json = await readJson(res);
       if (!res.ok || !json.success) {
@@ -342,11 +302,7 @@ export default function PlaylistManager({
           body: formData
         });
 
-        if (res.status === 401) {
-          setUploadMsg({ type: 'error', text: '登入已失效，請重新登入後再上傳' });
-          onRequestLogin?.();
-          return;
-        }
+        if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
 
         const json = await readJson(res);
         added += json.files?.length || 0;
@@ -431,6 +387,11 @@ export default function PlaylistManager({
   };
 
   // 曲目勾選操作
+  const selectPlaylist = (id) => {
+    setSelectedId(id);
+    setUploadMsg(null);
+  };
+
   const toggleSelectTrack = (filename) => {
     setSelectedTrackFilenames((prev) =>
       prev.includes(filename) ? prev.filter((f) => f !== filename) : [...prev, filename]
@@ -454,9 +415,11 @@ export default function PlaylistManager({
     if (selectedTrackFilenames.length === 0) return;
     const targetPl = playlists.find((p) => p.id === targetPlaylistId);
     if (
-      !window.confirm(
-        `確定要將選取的 ${selectedTrackFilenames.length} 首歌曲移動至「${targetPl?.name || targetPlaylistId}」嗎？`
-      )
+      !(await confirm({
+        title: '移動歌曲',
+        message: `確定要將選取的 ${selectedTrackFilenames.length} 首歌曲移動至「${targetPl?.name || targetPlaylistId}」嗎？`,
+        confirmLabel: '移動'
+      }))
     ) {
       return;
     }
@@ -472,11 +435,7 @@ export default function PlaylistManager({
         })
       });
 
-      if (res.status === 401) {
-        notify('請先以管理員身分登入', 'error');
-        onRequestLogin?.();
-        return;
-      }
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
 
       const json = await readJson(res);
       if (res.ok && json.success) {
@@ -497,9 +456,12 @@ export default function PlaylistManager({
   const handleBatchDelete = async () => {
     if (selectedTrackFilenames.length === 0) return;
     if (
-      !window.confirm(
-        `確定要永久刪除選取的 ${selectedTrackFilenames.length} 首歌曲嗎？\n此動作將直接從硬碟中移除檔案且無法復原。`
-      )
+      !(await confirm({
+        title: '刪除歌曲',
+        message: `確定要永久刪除選取的 ${selectedTrackFilenames.length} 首歌曲嗎？\n檔案會直接從硬碟移除，無法復原。`,
+        confirmLabel: '刪除',
+        danger: true
+      }))
     ) {
       return;
     }
@@ -514,11 +476,7 @@ export default function PlaylistManager({
         })
       });
 
-      if (res.status === 401) {
-        notify('請先以管理員身分登入後再執行刪除。', 'error');
-        onRequestLogin?.();
-        return;
-      }
+      if (res.status === 401) return; // 登入失效：authFetch 已登出，整個後台會切回登入頁
 
       const json = await readJson(res);
       if (res.ok && json.success) {
@@ -614,18 +572,24 @@ export default function PlaylistManager({
               {playlists.map((pl) => {
                 const count = pl.trackCount ?? pl.count ?? 0;
                 const isSelected = selectedId === pl.id;
-                const isEditingThis = editingPlaylistId === pl.id;
 
                 return (
                   <div
                     key={pl.id}
-                    onClick={() => {
-                      if (!isEditingThis) {
-                        setSelectedId(pl.id);
-                        setUploadMsg(null);
+                    role="button"
+                    tabIndex={0}
+                    aria-current={isSelected ? 'true' : undefined}
+                    aria-label={`${pl.name || pl.id}，${count} 首`}
+                    onClick={() => selectPlaylist(pl.id)}
+                    onKeyDown={(e) => {
+                      // 只處理焦點在整列本身時；列裡的編輯／刪除按鈕自己處理按鍵
+                      if (e.target !== e.currentTarget) return;
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        selectPlaylist(pl.id);
                       }
                     }}
-                    className={`group relative flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all ${
+                    className={`group relative flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all focus-visible:outline-2 focus-visible:outline-purple-400 ${
                       isSelected
                         ? 'bg-purple-950/40 text-white border border-purple-500/50 shadow-md shadow-purple-500/10'
                         : 'bg-slate-900/40 hover:bg-slate-800/50 text-slate-300 border border-slate-800/70'
@@ -643,41 +607,6 @@ export default function PlaylistManager({
                         <ListMusic className="w-3.5 h-3.5" />
                       </div>
 
-                      {/* 正在編輯名稱 vs 一般檢視 */}
-                      {isEditingThis ? (
-                        <div className="flex items-center gap-1.5 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="text"
-                            value={editingPlaylistName}
-                            onChange={(e) => setEditingPlaylistName(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleSavePlaylistName(e, pl.id);
-                              if (e.key === 'Escape') setEditingPlaylistId(null);
-                            }}
-                            autoFocus
-                            disabled={isSavingPlaylistName}
-                            className="bg-slate-950 border border-purple-500 text-xs text-white rounded-lg px-2 py-1 w-full focus:outline-none"
-                          />
-                          <button
-                            onClick={(e) => handleSavePlaylistName(e, pl.id)}
-                            disabled={isSavingPlaylistName}
-                            className="p-1 text-emerald-400 hover:bg-emerald-500/20 rounded-md"
-                            title="儲存"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingPlaylistId(null);
-                            }}
-                            className="p-1 text-slate-400 hover:bg-slate-800 rounded-md"
-                            title="取消"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ) : (
                         <div className="min-w-0 flex-1">
                           <p className="text-xs font-bold truncate tracking-tight">{pl.name || pl.id}</p>
                           {pl.description && (
@@ -686,11 +615,10 @@ export default function PlaylistManager({
                             </p>
                           )}
                         </div>
-                      )}
                     </div>
 
                     {/* 右側曲目計數與編輯按鈕 */}
-                    {!isEditingThis && (
+                    {(
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         <span
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
@@ -705,14 +633,11 @@ export default function PlaylistManager({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (onEditPlaylist) {
-                              onEditPlaylist(pl);
-                            } else {
-                              handleStartEditPlaylist(e, pl);
-                            }
+                            onEditPlaylist?.(pl);
                           }}
                           className="p-1.5 text-slate-400 hover:text-purple-300 hover:bg-purple-500/10 rounded-lg transition-colors"
                           title="編輯歌單設定（名稱、播放模式、轉場）"
+                          aria-label={`編輯歌單「${pl.name || pl.id}」`}
                         >
                           <Edit2 className="w-3 h-3" />
                         </button>
@@ -726,6 +651,7 @@ export default function PlaylistManager({
                               : 'text-slate-400 hover:text-rose-400 hover:bg-rose-500/10'
                           }`}
                           title={count > 0 ? `此歌單內仍有 ${count} 首歌曲，不可刪除 (請先清空或移動歌曲)` : '刪除此空白歌單'}
+                          aria-label={`刪除歌單「${pl.name || pl.id}」`}
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
@@ -747,14 +673,15 @@ export default function PlaylistManager({
         <div className="lg:col-span-8 p-5 sm:p-7 flex flex-col justify-between">
           <div>
             {/* 右側頂部歌單標題與操作 */}
-            <div className="flex items-center justify-between gap-4 mb-5 pb-4 border-b border-slate-800">
-              <div className="flex items-center gap-3">
+            {/* 手機寬度改成上下排：原本左右硬擠，「編輯歌單設定」會被壓成一字一行的直排 */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 mb-5 pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-3 min-w-0">
                 <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-600/20 flex items-center justify-center ring-1 ring-white/10 flex-shrink-0">
                   <ListMusic className="w-5 h-5" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-base font-bold text-white tracking-tight">
+                    <h3 className="text-base font-bold text-white tracking-tight break-words">
                       {currentPlaylist.name}
                     </h3>
                     <span className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700">
@@ -775,10 +702,10 @@ export default function PlaylistManager({
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
                 <button
                   onClick={() => onEditPlaylist?.(currentPlaylist)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-semibold transition-all shadow-sm"
+                  className="flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-semibold transition-all shadow-sm"
                   title="編輯歌單名稱、播放模式與轉場設定"
                 >
                   <Sliders className="w-3.5 h-3.5" />
@@ -792,6 +719,7 @@ export default function PlaylistManager({
                   }}
                   disabled={isLoading}
                   title="重新整理此歌單曲目清單"
+                  aria-label="重新整理此歌單曲目清單"
                   className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-all"
                 >
                   <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
@@ -867,6 +795,7 @@ export default function PlaylistManager({
 
               {uploadMsg && (
                 <div
+                  role={uploadMsg.type === 'error' ? 'alert' : 'status'}
                   className={`mt-3 p-2.5 rounded-xl text-xs flex items-center justify-between ${
                     uploadMsg.type === 'success'
                       ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
@@ -876,7 +805,7 @@ export default function PlaylistManager({
                   }`}
                 >
                   <span>{uploadMsg.text}</span>
-                  <button onClick={() => setUploadMsg(null)} className="text-slate-400 hover:text-white ml-2">
+                  <button onClick={() => setUploadMsg(null)} aria-label="關閉訊息" className="text-slate-400 hover:text-white ml-2">
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -895,7 +824,7 @@ export default function PlaylistManager({
 
             {/* 批量操作控制列 */}
             {selectedTrackFilenames.length > 0 && (
-              <div className="flex flex-wrap items-center justify-between gap-3 p-3 mb-3 bg-purple-950/40 border border-purple-500/40 rounded-2xl animate-in fade-in">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-3 mb-3 bg-purple-950/40 border border-purple-500/40 rounded-2xl animate-fade-in">
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
                   <span className="text-xs font-bold text-white">
@@ -914,6 +843,7 @@ export default function PlaylistManager({
                   <div className="flex items-center gap-1.5 bg-slate-900/90 border border-slate-700/80 rounded-xl px-2 py-1">
                     <span className="text-[11px] text-slate-400">移動至：</span>
                     <select
+                      aria-label="移動至歌單"
                       value={targetPlaylistId}
                       onChange={(e) => setTargetPlaylistId(e.target.value)}
                       className="bg-slate-950 text-xs text-slate-200 rounded-lg px-2 py-1 border border-slate-700 focus:outline-none focus:border-purple-500"
@@ -972,6 +902,7 @@ export default function PlaylistManager({
                           onChange={toggleSelectAll}
                           className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-purple-600 focus:ring-purple-500 cursor-pointer accent-purple-600"
                           title="全選 / 取消全選"
+                          aria-label="全選本頁曲目"
                         />
                       </th>
                       <th className="py-2.5 px-3 w-10">#</th>
@@ -1000,6 +931,7 @@ export default function PlaylistManager({
                               type="checkbox"
                               checked={isChecked}
                               onChange={() => toggleSelectTrack(t.filename)}
+                              aria-label={`選取「${t.title || t.filename}」`}
                               className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-purple-600 focus:ring-purple-500 cursor-pointer accent-purple-600"
                             />
                           </td>
@@ -1010,7 +942,9 @@ export default function PlaylistManager({
                                 src={`/api/playlists/${selectedId}/tracks/${encodeURIComponent(
                                   t.filename
                                 )}/cover`}
-                                alt="art"
+                                alt=""
+                                loading="lazy"
+                                decoding="async"
                                 className="w-full h-full object-cover"
                                 onError={(e) => {
                                   e.target.src =

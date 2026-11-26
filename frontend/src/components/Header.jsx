@@ -1,17 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import {
-  Sliders,
-  Radio,
-  ExternalLink,
-  Activity,
-  LogOut,
-  KeyRound,
-  UserCheck,
-  LogIn,
-  Users,
-  FolderArchive,
-  Headphones
-} from 'lucide-react';
+import { Activity, LogOut, KeyRound, UserCheck, Users, FolderArchive, Headphones } from 'lucide-react';
+import { DEFAULT_BITRATE_KBPS } from '../utils/stream.js';
 
 export default function Header({
   status,
@@ -19,7 +8,6 @@ export default function Header({
   setAutoRefresh,
   connection = 'polling',
   currentUser,
-  onOpenLogin,
   onOpenChangePassword,
   onOpenBackups,
   onLogout,
@@ -32,22 +20,34 @@ export default function Header({
   const iceOnline = status?.icecast?.online ?? false;
   const listeners = status?.icecast?.listeners ?? 0;
   const listenerPeak = status?.icecast?.listenerPeak ?? 0;
-  const bitrate = status?.icecast?.bitrate ?? 128;
+  const bitrate = status?.icecast?.bitrate ?? DEFAULT_BITRATE_KBPS;
   const mount = status?.icecast?.mount ?? 'stream';
 
-  // 點擊選單外部自動關閉下拉
+  // 點擊選單外部或按 Esc 關閉下拉
+  const menuButtonRef = useRef(null);
   useEffect(() => {
+    if (!isUserMenuOpen) return;
     const handleClickOutside = (event) => {
       if (userMenuRef.current && !userMenuRef.current.contains(event.target)) {
         setIsUserMenuOpen(false);
       }
     };
+    const handleKey = (event) => {
+      if (event.key === 'Escape') {
+        setIsUserMenuOpen(false);
+        menuButtonRef.current?.focus();
+      }
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [isUserMenuOpen]);
 
   return (
-    <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur-xl sticky top-0 z-30 shadow-lg">
+    <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur-xl md:sticky md:top-0 z-30 shadow-lg">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row items-center justify-between gap-4">
         
         {/* 左側：Logo 與電台標題 */}
@@ -90,7 +90,7 @@ export default function Header({
               </span>
             </div>
 
-            <span className="text-slate-700">|</span>
+            <span className="text-slate-700 hidden sm:inline" aria-hidden="true">|</span>
 
             {/* 2. Icecast 串流狀態 */}
             <div className="flex items-center gap-1.5" title={`Icecast 串流輸出: /${mount} (MP3 CBR)`}>
@@ -105,7 +105,7 @@ export default function Header({
               </span>
             </div>
 
-            <span className="text-slate-700">|</span>
+            <span className="text-slate-700 hidden sm:inline" aria-hidden="true">|</span>
 
             {/* 3. 在線聽眾 (純圖示 + 數值 + max 峰值) */}
             <div className="flex items-center gap-1.5" title={`在線聽眾 (max: ${listenerPeak})`}>
@@ -152,20 +152,28 @@ export default function Header({
 
           {/* 最右側：精緻小型使用者頭像 */}
           <div className="relative ml-0.5" ref={userMenuRef}>
-            {currentUser ? (
+            {currentUser && (
               <div>
                 <button
+                  ref={menuButtonRef}
                   onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                  aria-haspopup="true"
+                  aria-expanded={isUserMenuOpen}
+                  aria-controls="admin-user-menu"
+                  aria-label={`管理員選單 (${currentUser.username})`}
                   title={`管理員: ${currentUser.username} (點擊展開選單)`}
                   className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center text-white font-bold text-xs ring-2 ring-purple-500/40 hover:ring-purple-400 shadow-md shadow-purple-600/20 active:scale-95 transition-all relative group"
                 >
-                  <span>{currentUser.username.charAt(0).toUpperCase()}</span>
+                  <span aria-hidden="true">{currentUser.username.charAt(0).toUpperCase()}</span>
                   <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-slate-900 shadow-sm" />
                 </button>
 
                 {/* 使用者下拉選單 (貼齊右邊) */}
                 {isUserMenuOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-48 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl p-2 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div
+                    id="admin-user-menu"
+                    className="absolute right-0 top-full mt-2 w-48 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl p-2 z-50 animate-pop-in"
+                  >
                     <div className="px-3 py-2 border-b border-slate-800 mb-1">
                       <div className="flex items-center gap-1.5 text-xs text-slate-400">
                         <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
@@ -182,7 +190,7 @@ export default function Header({
                       className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:bg-slate-800/80 rounded-xl transition-all"
                     >
                       <FolderArchive className="w-3.5 h-3.5 text-indigo-400" />
-                      <span>歌單排程備份</span>
+                      <span>備份與還原</span>
                     </button>
 
                     <button
@@ -204,19 +212,11 @@ export default function Header({
                       className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 rounded-xl transition-all mt-0.5"
                     >
                       <LogOut className="w-3.5 h-3.5" />
-                      <span>登出管理身分</span>
+                      <span>登出</span>
                     </button>
                   </div>
                 )}
               </div>
-            ) : (
-              <button
-                onClick={onOpenLogin}
-                title="點擊登入管理員帳號"
-                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center justify-center transition-all shadow-sm active:scale-95"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-              </button>
             )}
           </div>
         </div>

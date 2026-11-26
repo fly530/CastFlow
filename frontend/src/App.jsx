@@ -107,8 +107,24 @@ export default function App() {
     if (window.location.pathname !== targetPath) {
       window.history.pushState(null, '', targetPath);
     }
-    document.title = view === 'admin' ? 'CastFlow 控制後台 - 管理中心' : 'CastFlow - 雲原生線上廣播電台';
   };
+
+  // 頁面標題跟著畫面走。原本只在按鈕切換時更新：直接開 /admin/ 或按上一頁時，標題仍是前台的
+  useEffect(() => {
+    document.title = currentView === 'admin' ? 'CastFlow 管理後台' : 'CastFlow - 雲原生線上廣播電台';
+  }, [currentView]);
+
+  // 操作到一半登入失效 (token 過期、別的裝置改了密碼)：後台會直接切回登入頁，這裡說明原因
+  // 只在後台提示：聽眾頁面上留著舊 token 的管理員不需要看到這則
+  const currentViewRef = useRef(currentView);
+  currentViewRef.current = currentView;
+  useEffect(() => {
+    const onExpired = () => {
+      if (currentViewRef.current === 'admin') showToast('登入已失效，請重新登入', 'warning');
+    };
+    window.addEventListener('castflow_session_expired', onExpired);
+    return () => window.removeEventListener('castflow_session_expired', onExpired);
+  }, [showToast]);
 
   // 驗證管理者 Session
   const retryTimerRef = useRef(null);
@@ -164,7 +180,7 @@ export default function App() {
           )}
         </Suspense>
       </ViewErrorBoundary>
-      <Toast key={toast?.id} toast={toast} onClose={closeToast} />
+      <Toast toast={toast} onClose={closeToast} />
     </>
   );
 }

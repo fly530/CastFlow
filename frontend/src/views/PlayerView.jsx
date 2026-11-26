@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { useRadioStatus } from '../hooks/useRadioStatus.js';
 import UnifiedPlayerCard from '../components/UnifiedPlayerCard.jsx';
 import StreamInfoModal from '../components/StreamInfoModal.jsx';
+import { DEFAULT_BITRATE_KBPS } from '../utils/stream.js';
 
 export default function PlayerView({ currentUser, onSwitchToAdmin }) {
   const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
   const { status: statusData } = useRadioStatus({ pollMs: 15000 });
 
   const online = statusData?.online ?? false;
-  const bitrate = statusData?.icecast?.bitrate ?? 128;
+  const bitrate = statusData?.icecast?.bitrate ?? DEFAULT_BITRATE_KBPS;
   const currentTrack = statusData?.currentTrack ?? {
     title: 'CastFlow Live',
     artist: '雲原生自動化廣播電台',
