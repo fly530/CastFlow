@@ -26,6 +26,7 @@ let currentPlayingTitle = null;
 let currentTrackStartTime = Date.now();
 
 const MUSIC_DIR = process.env.MUSIC_DIR || path.resolve(process.cwd(), '../music');
+export const QUEUE = { PRIORITY: 'priority_queue', DYNAMIC: 'dynamic_queue' };
 
 // 定時規則 (fixed_time / hourly) 的補播窗口：排定時間起算 2 分鐘內仍會補播。
 // 涵蓋 server 重啟、Telnet 暫時斷線等情況；超過窗口就放棄，避免很久以後才突然插播。
@@ -338,14 +339,14 @@ let plannedQueue = [];
 /**
  * 透過 Telnet 將曲目推送至 Liquidsoap dynamic_queue 並登記至 plannedQueue
  */
-export async function pushTrackToLiquidsoap(trackPathOrDecision, interruptMode = 'wait_track_end') {
+export async function pushTrackToLiquidsoap(trackPathOrDecision, interruptMode = 'wait_track_end', options = {}) {
   try {
     const isDecisionObj = typeof trackPathOrDecision === 'object' && trackPathOrDecision.track;
     const trackPath = isDecisionObj ? trackPathOrDecision.track.fullPath : trackPathOrDecision;
     const filename = isDecisionObj ? trackPathOrDecision.track.filename : path.basename(trackPath);
     const reason = isDecisionObj ? trackPathOrDecision.reason : 'manual';
-    const queueName = ['fixed_time', 'hourly', 'interval', 'manual'].includes(reason)
-      ? 'priority_queue' : 'dynamic_queue';
+    const queueName = options.queue || (['fixed_time', 'hourly', 'interval', 'manual'].includes(reason)
+      ? QUEUE.PRIORITY : QUEUE.DYNAMIC);
 
     const pushCmd = `${queueName}.push ${trackPath}`;
     const pushRes = await sendTelnetCommand(pushCmd);
@@ -704,7 +705,32 @@ export async function getUpcomingTracks(count = 3) {
 /**
  * 彙整整體廣播即時狀態 (提供 REST API 與 WebSocket 廣播)
  */
-export async function getRadioStatus() {
+const STATUS_MAX_AGE_MS = 1000;
+let statusCache = null;
+let statusInflight = null;
+
+export function invalidateRadioStatus() {
+  statusCache = null;
+}
+
+export function getRadioStatus({ maxAgeMs = STATUS_MAX_AGE_MS } = {}) {
+  if (statusCache && Date.now() - statusCache.at < maxAgeMs) {
+    return Promise.resolve(statusCache.data);
+  }
+  if (!statusInflight) {
+    statusInflight = computeRadioStatus()
+      .then((data) => {
+        statusCache = { at: Date.now(), data };
+        return data;
+      })
+      .finally(() => {
+        statusInflight = null;
+      });
+  }
+  return statusInflight;
+}
+
+async function computeRadioStatus() {
   const [iceStats, metadata, remaining, upcomingTracks] = await Promise.all([
     icecast.getStats().catch(() => ({ online: false })),
     liquidsoap.getMetadata().catch(() => ({})),
