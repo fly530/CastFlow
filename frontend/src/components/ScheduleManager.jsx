@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Calendar,
   Clock,
@@ -6,15 +6,11 @@ import {
   Edit2,
   Trash2,
   Plus,
-  Radio,
-  Sparkles,
-  Layers,
-  CheckCircle2,
-  AlertCircle,
   ToggleLeft,
   ToggleRight,
   ListMusic,
-  RefreshCw
+  RefreshCw,
+  MoreHorizontal
 } from 'lucide-react';
 import { authFetch } from '../utils/api.js';
 
@@ -41,6 +37,24 @@ export default function ScheduleManager({
   const [schedules, setSchedules] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [triggeringId, setTriggeringId] = useState(null);
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (openMenuId === null) return;
+    const closeOnOutside = (event) => {
+      if (!menuRef.current?.contains(event.target)) setOpenMenuId(null);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setOpenMenuId(null);
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [openMenuId]);
 
   const fetchSchedules = async () => {
     try {
@@ -151,20 +165,20 @@ export default function ScheduleManager({
   };
 
   return (
-    <div className="rounded-3xl bg-slate-900/70 border border-slate-800 backdrop-blur-xl p-6 shadow-2xl">
+    <div className="rounded-3xl bg-slate-900/70 border border-slate-800 p-4 sm:p-6 shadow-xl shadow-black/10">
       {/* 頂部功能區 */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b border-slate-800">
         <div>
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400">
+            <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-300">
               <Calendar className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-white tracking-tight">
-                智慧自動化排程調度中心 (AutoDJ Schedules)
+              <h2 className="text-lg font-semibold text-white tracking-tight">
+                排程規則
               </h2>
-              <p className="text-xs text-slate-400">
-                動態調度全天輪播比例、間隔台呼插播或指定精確時間單曲
+              <p className="text-sm text-slate-400 mt-0.5">
+                共 {schedules.length} 條規則，{schedules.filter((schedule) => schedule.is_active).length} 條啟用
               </p>
             </div>
           </div>
@@ -174,15 +188,16 @@ export default function ScheduleManager({
           <button
             onClick={fetchSchedules}
             disabled={isLoading}
-            className="flex items-center justify-center p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition-all active:scale-95 disabled:opacity-50"
+            className="flex items-center justify-center size-10 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/60 transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-400"
             title="重新整理排程清單"
+            aria-label="重新整理排程清單"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
 
           <button
             onClick={onOpenNewSchedule}
-            className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-lg shadow-purple-600/25 transition-all"
+            className="flex-1 sm:flex-initial min-h-10 flex items-center justify-center gap-2 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-400"
           >
             <Plus className="w-4 h-4" />
             <span>新增排程規則</span>
@@ -191,9 +206,9 @@ export default function ScheduleManager({
       </div>
 
       {/* 排程規則列表 */}
-      <div className="mt-6 space-y-3">
+      <div className="mt-5 space-y-3">
         {schedules.length === 0 && !isLoading && (
-          <div className="text-center py-12 text-slate-500 text-xs">
+          <div className="text-center py-12 text-slate-400 text-sm">
             目前尚無設定任何排程規則，點擊上方按鈕建立新排程。
           </div>
         )}
@@ -203,151 +218,91 @@ export default function ScheduleManager({
           const isHourly = sch.schedule_type === 'hourly';
           const isInterval = sch.schedule_type === 'interval';
           const isFixedTime = sch.schedule_type === 'fixed_time';
+          const typeLabel = isContinuous ? `連續輪播 · 權重 ${sch.weight}`
+            : isHourly ? `每小時 :${String(sch.target_time || '00').replace(':', '').padStart(2, '0')}`
+              : isInterval ? `每 ${sch.interval_every_tracks} 首插播 ${sch.interval_play_tracks} 首`
+                : '指定時間';
+          const timingLabel = isFixedTime
+            ? `${sch.target_date ? `${sch.target_date} ` : ''}${sch.target_time} · ${sch.interrupt_mode === 'immediate_fade' ? '立即淡出' : '等待播畢'}`
+            : isHourly
+              ? `${sch.is_all_day ? '全天' : `${sch.start_time || '00:00'}–${sch.end_time || '23:59'}`} · ${sch.interrupt_mode === 'immediate_fade' ? '立即淡出' : '等待播畢'}`
+              : sch.is_all_day ? '全天' : `${sch.start_time}–${sch.end_time}`;
 
           return (
             <div
               key={sch.id}
-              className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+              className={`relative rounded-2xl border p-4 sm:p-5 transition-colors ${
                 sch.is_active
-                  ? 'bg-slate-950/60 border-slate-800/80 hover:border-slate-700'
-                  : 'bg-slate-950/20 border-slate-900/50 opacity-60'
+                  ? 'bg-slate-950/45 border-slate-800 hover:border-slate-700'
+                  : 'bg-slate-900/45 border-slate-800/70'
               }`}
             >
-              <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-                {/* 左側：排程基本資訊與歌單徽章 */}
-                <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-                  <div className="w-10 h-10 rounded-2xl bg-slate-800/90 border border-slate-700/80 flex items-center justify-center text-purple-300 shadow-inner flex-shrink-0">
-                    <ListMusic className="w-5 h-5 text-purple-300" />
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-slate-800/80 text-slate-300">
+                    <ListMusic className="size-5" />
                   </div>
-
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-sm font-bold text-slate-100 truncate">{sch.title}</h3>
-
-                      {/* 類型標籤 */}
-                      {isContinuous && (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                          輪播 (權重 {sch.weight})
-                        </span>
-                      )}
-                      {isHourly && (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          <span>每小時 :{String(sch.target_time || '00').replace(':', '').padStart(2, '0')} 分插播</span>
-                        </span>
-                      )}
-                      {isInterval && (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                          每 {sch.interval_every_tracks} 首插播 {sch.interval_play_tracks} 首
-                        </span>
-                      )}
-                      {isFixedTime && (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20 flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          <span>指定 {sch.target_time}</span>
-                        </span>
-                      )}
-
-                      {!sch.is_active && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">
-                          已停用
-                        </span>
-                      )}
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-base font-semibold leading-6 text-slate-100">{sch.title}</h3>
+                      <span className="rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-200">{typeLabel}</span>
+                      <span className={`rounded-md px-2 py-1 text-xs font-medium ${sch.is_active ? 'bg-emerald-500/10 text-emerald-300' : 'bg-slate-800 text-slate-400'}`}>
+                        {sch.is_active ? '啟用中' : '已停用'}
+                      </span>
                     </div>
-
-                    {/* 時間細節描述 */}
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-400 flex-wrap">
-                      <span className="flex items-center gap-1">
-                        <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-slate-400">
+                      <span className="flex items-center gap-1.5">
+                        <Calendar className="size-4 shrink-0 text-slate-500" />
                         {sch.active_from || sch.active_until
                           ? `${sch.active_from || '不限起日'} ~ ${sch.active_until || '不限迄日'}`
                           : '永久生效'}
                       </span>
-                      <span className="text-slate-700">•</span>
-                      <span className="flex items-center gap-1">
-                        <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                        <span>{formatDays(sch.days_of_week)}</span>
+                      <span>{formatDays(sch.days_of_week)}</span>
+                      <span className="flex items-center gap-1.5">
+                        <Clock className="size-4 shrink-0 text-slate-500" />
+                        {timingLabel}
                       </span>
-
-                      <span className="text-slate-700">•</span>
-
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3.5 h-3.5 text-slate-500" />
-                        {isFixedTime ? (
-                          <span>
-                            {sch.target_date ? `${sch.target_date} ` : '每日 '}
-                            {sch.target_time} (
-                            {sch.interrupt_mode === 'immediate_fade' ? '淡出插播' : '等待播畢'}
-                            )
-                          </span>
-                        ) : isHourly ? (
-                          <span>
-                            {sch.is_all_day ? '全天每小時 ' : `${sch.start_time || '00:00'} ~ ${sch.end_time || '23:59'} 每小時 `}
-                            第 {String(sch.target_time || '00').replace(':', '').padStart(2, '0')} 分 (
-                            {sch.interrupt_mode === 'immediate_fade' ? '淡出插播' : '等待播畢'}
-                            )
-                          </span>
-                        ) : sch.is_all_day ? (
-                          <span>全天 24 小時</span>
-                        ) : (
-                          <span>
-                            {sch.start_time} ~ {sch.end_time}
-                          </span>
-                        )}
-                      </span>
-
-                      <span className="text-slate-700">•</span>
-
-                      <span>
-                        歌單：{sch.playlist_name}
-                      </span>
+                      <span>歌單：{sch.playlist_name}</span>
                     </div>
                   </div>
                 </div>
 
-                {/* 右側：動作按鈕 */}
-                <div className="flex items-center gap-2 self-end lg:self-center">
-                  {/* 立即觸發播放 */}
+                <div className="flex shrink-0 items-center gap-2 self-end lg:self-center">
                   <button
                     onClick={() => handleTriggerNow(sch)}
                     disabled={triggeringId === sch.id}
-                    title="立即插入廣播隊列播放"
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-purple-600/10 hover:bg-purple-600/20 text-purple-300 border border-purple-500/30 text-xs font-semibold transition-all disabled:opacity-50"
+                    className="flex min-h-10 items-center gap-2 rounded-xl border border-purple-500/30 bg-purple-500/10 px-3 text-sm font-medium text-purple-200 transition-colors hover:bg-purple-500/20 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-400"
                   >
-                    <Play className="w-3.5 h-3.5" />
+                    <Play className="size-4" />
                     <span>{triggeringId === sch.id ? '推播中...' : '立即插播'}</span>
                   </button>
-
-                  {/* 啟用/停用開關 */}
-                  <button
-                    onClick={() => handleToggleActive(sch)}
-                    title={sch.is_active ? '點擊停用' : '點擊啟用'}
-                    className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
-                  >
-                    {sch.is_active ? (
-                      <ToggleRight className="w-5 h-5 text-emerald-400" />
-                    ) : (
-                      <ToggleLeft className="w-5 h-5 text-slate-600" />
+                  <div className="relative" ref={openMenuId === sch.id ? menuRef : null}>
+                    <button
+                      type="button"
+                      onClick={() => setOpenMenuId(openMenuId === sch.id ? null : sch.id)}
+                      aria-label={`操作「${sch.title}」`}
+                      aria-expanded={openMenuId === sch.id}
+                      aria-controls={openMenuId === sch.id ? `schedule-actions-${sch.id}` : undefined}
+                      className="flex size-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-300 transition-colors hover:bg-slate-700 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-400"
+                    >
+                      <MoreHorizontal className="size-5" />
+                    </button>
+                    {openMenuId === sch.id && (
+                      <div id={`schedule-actions-${sch.id}`} className="absolute right-0 top-full z-20 mt-2 w-44 rounded-xl border border-slate-700 bg-slate-900 p-1.5 shadow-xl shadow-black/30">
+                        <button type="button" onClick={() => { setOpenMenuId(null); onEditSchedule(sch); }} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-slate-200 hover:bg-slate-800 focus-visible:bg-slate-800 focus-visible:outline-none">
+                          <Edit2 className="size-4" /> 編輯規則
+                        </button>
+                        <button type="button" onClick={() => { setOpenMenuId(null); handleToggleActive(sch); }} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-slate-200 hover:bg-slate-800 focus-visible:bg-slate-800 focus-visible:outline-none">
+                          {sch.is_active ? <ToggleRight className="size-4" /> : <ToggleLeft className="size-4" />}
+                          {sch.is_active ? '停用規則' : '啟用規則'}
+                        </button>
+                        <div className="my-1 border-t border-slate-800" />
+                        <button type="button" onClick={() => { setOpenMenuId(null); handleDelete(sch); }} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-rose-300 hover:bg-rose-500/10 focus-visible:bg-rose-500/10 focus-visible:outline-none">
+                          <Trash2 className="size-4" /> 刪除規則
+                        </button>
+                      </div>
                     )}
-                  </button>
-
-                  {/* 編輯 */}
-                  <button
-                    onClick={() => onEditSchedule(sch)}
-                    title="編輯排程"
-                    className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                  </button>
-
-                  {/* 刪除 */}
-                  <button
-                    onClick={() => handleDelete(sch)}
-                    title="刪除排程"
-                    className="p-1.5 text-slate-400 hover:text-rose-400 rounded-xl hover:bg-slate-800 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  </div>
                 </div>
               </div>
             </div>
