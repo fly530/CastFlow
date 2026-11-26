@@ -104,6 +104,25 @@ export function normalizeSchedule(input, { existing = null, playlistExists = () 
     out.target_date = null;
   }
 
+  // 生效日期區間：建立時空白代表永久生效；更新時與既有值合併後驗證，
+  // 並由下方 touched 集合只寫入請求實際帶來的日期欄位。
+  const activeFrom = blankToNull(merged.active_from);
+  const activeUntil = blankToNull(merged.active_until);
+  for (const [value, label] of [[activeFrom, '生效起日'], [activeUntil, '生效迄日']]) {
+    if (value && !DATE_RE.test(value)) return { error: `${label}格式需為 YYYY-MM-DD` };
+    if (value) {
+      const date = new Date(`${value}T00:00:00Z`);
+      if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+        return { error: `${label}不是有效日期` };
+      }
+    }
+  }
+  if (activeFrom && activeUntil && activeFrom > activeUntil) {
+    return { error: '生效迄日不得早於生效起日' };
+  }
+  out.active_from = activeFrom;
+  out.active_until = activeUntil;
+
   // 數值欄位
   const weight = merged.weight === undefined || merged.weight === null ? 1 : toInt(merged.weight);
   if (!(weight >= 1 && weight <= 100)) return { error: '輪播權重需為 1 ~ 100 的整數' };

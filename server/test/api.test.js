@@ -190,6 +190,30 @@ describe('排程驗證', () => {
     assert.equal(toggled.body.data.target_time, '21:30:00');
   });
 
+  test('生效起日與迄日會儲存、更新及清除', async () => {
+    const created = await api('POST', '/api/schedules', {
+      playlist_id: 'D', title: '日期區間', schedule_type: 'continuous', is_all_day: true,
+      active_from: '2027-01-01', active_until: '2027-01-31'
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    assert.equal(created.body.data.active_from, '2027-01-01');
+    assert.equal(created.body.data.active_until, '2027-01-31');
+
+    const updated = await api('PUT', `/api/schedules/${created.body.data.id}`, {
+      active_from: '2027-02-01', active_until: '2027-02-28'
+    });
+    assert.equal(updated.status, 200, JSON.stringify(updated.body));
+    assert.equal(updated.body.data.active_from, '2027-02-01');
+    assert.equal(updated.body.data.active_until, '2027-02-28');
+
+    const cleared = await api('PUT', `/api/schedules/${created.body.data.id}`, {
+      active_from: null, active_until: null
+    });
+    assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+    assert.equal(cleared.body.data.active_from, null);
+    assert.equal(cleared.body.data.active_until, null);
+  });
+
   test('改成全天時清掉舊時段，不會留下看不到的限定時段', async () => {
     const created = await api('POST', '/api/schedules', {
       playlist_id: 'C', title: '間隔', schedule_type: 'interval', is_all_day: 0,
